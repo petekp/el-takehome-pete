@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "record_id": "continuity-12809518-a4f9-4a74-b11e-144ed5aa9cff",
+  "project_root": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main",
+  "created_at": "2026-05-14T19:19:19.421Z",
+  "git": {
+    "cwd": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main"
+  },
+  "narrative": {
+    "goal": "Continue iterating on the XeF2 chemistry artifact pivot",
+    "next": "Wait for user instructions on how to proceed from XeF2 ship-state",
+    "state_markdown": "- XeF2 pivot shipped end-to-end; all 15 tasks complete; build passes; full arc smoke-tested in browser.\n- /new pre-loads the verbatim XeF2 question + two attachments (VSEPR chart + the student Lewis structure); composer supports drag/drop, paste, click-to-upload.\n- /api/chat accepts multimodal content blocks; classifier short-circuits on XeF2 keyword heuristic; affordance + wrapper prompts grounded in the attached photos.\n- 3D scene: xef2 (3 LP equatorial, 2 F axial), clf3 (T-shape morph), xef2-axial-strain (1 LP axial, pedagogical demo).\n- 5 toggles: Atoms (locked), Bonds, Lone pairs (default ON), Equatorial plane, Bond angles. Chips drive on automatically as focus advances.\n- 4 representation panels: Your materials (thumbnails + lightbox), Lewis, Wedge-and-dash, Geometry chart — XeF2 and ClF3 supported in each.\n- Closing summary card with 4 takeaway bullets + MolView and Wikipedia VSEPR resources.\n- /test-molecule dev page kept and updated to the new molecule set for fast iteration.",
+    "debt_markdown": "- Right column has tall empty space in some bubble stages; visual polish opportunity.\n- Active vs past bubble visual contrast could be stronger (currently opacity + shadow).\n- \"Click the bubble to follow along\" placeholder reads oddly during the rotation gate; would prefer \"Drag the molecule\" or hide during gate.\n- focus=lewis-isolation on Beat 2 does not auto-set activePanel=lewis; user must click panel for visual isolation. If automatic isolation is wanted, wire focus -> activePanel in prototype-store.\n- /test-molecule page kept as dev utility; decision pending on whether to strip before merge.\n- Dev server crashed post-test from Turbopack incremental-cache corruption (rm -rf .next resolves; not a code bug).\n- ClF3 axial-axial angle rendered as 180 idealized; real value about 87.5 axial-eq. Geometry card notes real angles; 3D does not bend.\n- xef2-axial-strain chart label says \"Strained (illegal)\" — accurate but blunt; could soften."
+  },
+  "continuity_kind": "standalone",
+  "resume_contract": {
+    "mode": "resume_standalone",
+    "auto_resume": false,
+    "requires_explicit_resume": true
+  }
+}

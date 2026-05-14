@@ -1,90 +1,134 @@
 /**
  * Artifact script — the load-bearing piece of the prototype.
  *
- * The artifact is a single inline interactive surface inside the chat. It
- * opens, hosts a 3D molecule viewport flanked by 2D representation panels,
- * runs the user through TWO prediction beats (with branching reveals), then
- * closes by pointing past itself toward external resources.
+ * After the XeF2 pivot, the artifact's job is to take Naomi's partial
+ * understanding ("the lone pairs are blocking the bonds") and complete it
+ * spatially: yes, the lone pairs are in the way, but specifically in the
+ * equatorial plane of a trigonal bipyramid, leaving the two axial positions
+ * for the F's — which is why the molecular geometry reads as LINEAR even
+ * though the electron-domain geometry is TRIGONAL BIPYRAMIDAL.
  *
- * The pedagogical move is REPRESENTATION LITERACY: Lewis structures, wedge-
- * and-dash diagrams, geometry charts, and 3D models are different lenses on
- * the same spatial reality, each useful for different questions. The course
- * teaches them as escalating abstractions; they are actually parallel
- * representations. Teaching the user to read them as lenses (rather than as
- * rules to memorize) unlocks the spatial intuition organic chemistry
- * presupposes.
- *
- * Triangulation is the epistemic move on each prediction: each wrong answer
- * maps to a distinct, structurally coherent misread of how a representation
- * relates to a 3D molecule. The reveal honors the user's prior thinking
- * before relocating it.
+ * The arc walks her through:
+ *   1. Open by naming her materials directly.
+ *   2. Read the Lewis structure: 3 lone pairs on Xe, 2 F bonds.
+ *   3. 3D reveal: lone pairs sit in the equatorial plane.
+ *   4. Predict why (equatorial = more space) — branched reveal.
+ *   5. Axial-strain demo for the "atoms-push-lone-pairs" misconception.
+ *   6. Close on the 180° F-Xe-F angle, why linear.
+ *   7. Predict the next case (2 lone pairs → T-shape, ClF3).
+ *   8. Morph to ClF3.
+ *   9. Closing summary that ties the whole row of the chart together.
+ *   10. "Go deeper" external resources.
  *
  * Voice everywhere is a jovial knowledgeable friend who remembers what it
- * was like to take chemistry. Not a tutor. No scoring, no "great job," no
- * completion states, no badges, no celebratory animations. Calibrated
- * honesty: when a representation has limitations, name them.
+ * was like to take chemistry. Naomi's words ("blocking", "wedge and dash
+ * is confusing") get echoed back early. No "chip" anywhere user-facing —
+ * use positional language ("the Lone pairs toggle up top", "the button up
+ * top"). No emoji, no exclamation points unless genuinely warranted.
  */
 
-export type Molecule = 'methane' | 'ammonia' | 'ammonium' | 'water'
+/**
+ * Molecules the artifact can render in the 3D viewport.
+ *
+ *   xef2               — XeF2, trigonal bipyramidal EDG, 3 lone pairs
+ *                        equatorial, 2 F axial, MG linear (180°).
+ *   xef2-axial-strain  — Hypothetical "what if a lone pair were axial?"
+ *                        configuration. Used in Beat 5 to demonstrate why
+ *                        equatorial wins. One lone pair moved to +y axial,
+ *                        the F that was there pushed equatorial.
+ *   clf3               — ClF3, trigonal bipyramidal EDG, 2 lone pairs
+ *                        equatorial, 1 F equatorial, 2 F axial, MG T-shape.
+ *                        Used in Beat 8 as the morph target.
+ */
+export type Molecule = 'xef2' | 'xef2-axial-strain' | 'clf3'
 
 /**
  * Focus states encode WHAT THE VIZ SHOULD BE EMPHASIZING at each bubble.
- * They are not just animations — each foregrounds the part of the molecule
- * (or panel) the bubble is talking about, and dims the rest.
  *
- *   default               — viewport idle, no emphasis.
- *   lewis-spotlight       — Lewis panel highlighted, other panels dim.
- *                           3D scene neutral.
- *   all-panels            — all four representation panels equally lit.
- *   panels-explore        — explore-the-panels invite (Beat 3 gate).
- *   lewis-omits           — Beat 4: subtly highlight that Lewis omits angles
- *                           (e.g. dim the geometry-card bond-angle line then
- *                           pop it).
- *   ammonia-lewis         — Beat 5/6: ammonia in 3D, Lewis panel emphasized.
- *   lone-pair-spatial     — Beat 7/8: lone pair foregrounded in 3D scene,
- *                           geometry-card highlighted.
- *   ammonium-tetrahedral  — Beat 8: NH4+ visible (lone pair gone), three
- *                           N–H bonds spring outward to 109.5°.
- *   water-bond-angle      — Beat 9/10: water in 3D, bond-angle annotation
- *                           highlighted.
- *   closing               — Beat 11: all panels + 3D view equally lit,
- *                           multi-lens framing.
+ *   default                 — viewport idle, no emphasis.
+ *   materials               — "Your materials" panel pulse; the user just
+ *                             learned the artifact is grounded in her photos.
+ *   lewis-isolation         — Beat 2: dim 3D + non-Lewis panels while the
+ *                             user reads the Lewis structure.
+ *   equatorial-reveal       — Beat 3: lone pairs in the equatorial plane
+ *                             get a brief pulse; equatorial plane toggle on.
+ *   predict-spatial         — Beat 4: waiting on her first prediction.
+ *   axial-strain            — Beat 5 (option-3 path): swap to the strained
+ *                             configuration so she can see how cramped axial
+ *                             positions are.
+ *   axial-bond-angle        — Beat 6: 180° angle toggle on, F-Xe-F line
+ *                             highlighted.
+ *   predict-tshape          — Beat 7: waiting on her T-shape prediction.
+ *   clf3-tshape             — Beat 8: morph to ClF3, T-shape visible.
+ *   closing                 — Beat 9: all panels equally lit, summary card
+ *                             visible.
  */
 export type FocusState =
   | 'default'
-  | 'lewis-spotlight'
-  | 'all-panels'
-  | 'panels-explore'
-  | 'lewis-omits'
-  | 'ammonia-lewis'
-  | 'lone-pair-spatial'
-  | 'ammonium-tetrahedral'
-  | 'water-bond-angle'
+  | 'materials'
+  | 'lewis-isolation'
+  | 'equatorial-reveal'
+  | 'predict-spatial'
+  | 'axial-strain'
+  | 'axial-bond-angle'
+  | 'predict-tshape'
+  | 'clf3-tshape'
   | 'closing'
 
 /**
- * Misconception tags for prediction 1 (Lewis-tells-shape question on
- * ammonia). The two wrong options are NOT equivalent — they encode
- * structurally distinct misreads of what a Lewis structure carries:
+ * Misconception tags for prediction 1 (why are the lone pairs in the
+ * equatorial plane?).
  *
- *   shape-flat       — "Yes, Lewis shows it's flat with the lone pair on top"
- *                      Misreads the 2D drawing as a top-down map of the
- *                      molecule's actual geometry.
- *   shape-pyramidal  — "Yes, Lewis shows it's pyramidal"
- *                      Lands on the right answer for the wrong reason —
- *                      thinks Lewis encodes geometry when it just doesn't.
- *   truth            — "No, Lewis structures don't carry shape information"
- *                      Correct.
- *   unclassified     — free-text we couldn't route.
+ *   notational     — "The lone pairs were drawn that way; it's arbitrary."
+ *                    Treats the spatial arrangement as a 2D convention.
+ *   equatorial     — "Equatorial positions have more space (fewer 90°
+ *                    neighbors)." The correct answer.
+ *   atoms-push     — "The F atoms are bigger and push the lone pairs to the
+ *                    equator." Inverts the actual relationship (lone pairs
+ *                    push atoms because lone pairs need more space).
+ *   unclassified   — Free text we couldn't route.
  */
-export type MisconceptionKey = 'shape-flat' | 'shape-pyramidal' | 'truth' | 'unclassified'
+export type Prediction1Key = 'notational' | 'equatorial' | 'atoms-push' | 'unclassified'
 
-export type PredictionOption = {
-  id: string
+/**
+ * Misconception tags for prediction 2 (5 domains, 2 lone pairs → what
+ * shape?).
+ *
+ *   linear         — "Linear, same as XeF2." Doesn't yet see that lone-pair
+ *                    count changes the molecular geometry.
+ *   tshape         — "T-shaped." Correct.
+ *   pyramidal      — "Trigonal pyramidal." Wrong row of the chart — that's
+ *                    a 4-domain shape, not a 5-domain shape.
+ *   unclassified   — Free text we couldn't route.
+ */
+export type Prediction2Key = 'linear' | 'tshape' | 'pyramidal' | 'unclassified'
+
+export type PredictionOption<K extends string> = {
+  id: K
   label: string
   isCorrect: boolean
-  misconceptionTag: MisconceptionKey
 }
+
+/**
+ * A bubble can mark a left-side element as "cued" — visually inviting the
+ * user to interact with it. The cue fades when the user engages.
+ */
+export type ElementCue =
+  | 'panel-materials'
+  | 'panel-lewis'
+  | 'panel-wedge'
+  | 'panel-geometry'
+  | 'panels-row'
+  | 'viewport'
+  | 'lone-pairs-toggle'
+  | 'bond-angles-toggle'
+
+/**
+ * A guided-interaction beat blocks advance until the user satisfies a gate.
+ *   panels-explored — user must click each of Lewis/Wedge/Geometry once.
+ *   rotation        — user must rotate the 3D scene by at least 90°.
+ */
+export type BubbleGate = 'panels-explored' | 'rotation'
 
 export type Bubble = {
   text: string
@@ -92,462 +136,358 @@ export type Bubble = {
   molecule?: Molecule
   /** Focus state to drive into when this bubble becomes active. */
   focus?: FocusState
-  /**
-   * Beat-3-style gates: the bubble does not progress until the user has
-   * interacted with the artifact in a specific way. Currently only used by
-   * the panels-explore beat (waits for ≥2 representation panel clicks).
-   */
-  gate?: 'panels-explored'
+  /** Visual cue applied to a left-side element while this bubble is active. */
+  cue?: ElementCue
+  /** Gate the user must satisfy before advancing. */
+  gate?: BubbleGate
 }
 
 export type ArtifactPath = {
   /** Sequence after the user submits their first prediction. */
   reveal1: Bubble[]
-  followUp: {
-    framing: string
-    options: PredictionOption[]
-  }
-  /** Sequence after they submit the follow-up, keyed by follow-up optionId. */
-  reveal2: Record<string, Bubble[]>
 }
 
 /** External resources rendered at the end of the artifact. */
 export type Resource = { title: string; url: string; source: string }
 
-// ----------------------------------------------------------------------
-// The opening sequence — beats 1 through 5, before prediction 1.
-// Five bubbles. Beat 3 ("try clicking each panel") gates on the user
-// interacting with at least two representation panels.
-// ----------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Opening beats. Five bubbles before prediction 1 — two of them are guided
+// interactions (panels exploration + rotation gate).
+// ---------------------------------------------------------------------------
 
 export const OPENING_BUBBLES: Bubble[] = [
   {
-    text: "Your textbook is showing you the same molecule in like four different ways and not really telling you they're different ways. Let me lay them out side by side so you can see what each one's doing.",
-    molecule: 'methane',
-    focus: 'lewis-spotlight',
+    text:
+      "Okay. I'm looking at your chart and your Lewis structure on the right. The row you're on — 5 domains, 3 lone pairs — is one of the genuinely tricky cells, and it's tricky for a specific reason. The 2D drawings can't show you what the lone pairs are actually doing in 3D.",
+    molecule: 'xef2',
+    focus: 'materials',
+    cue: 'panel-materials',
   },
   {
-    text: "These are all representing the same thing. The 3D model up top is the truth — the molecule actually in space. The diagrams down below are abstractions, each one focused on a different aspect.",
-    molecule: 'methane',
-    focus: 'all-panels',
+    text:
+      "Here's what your Lewis structure shows you: Xe in the middle, two F's bonded, three lone pairs on Xe. The drawing puts those lone pairs around Xe at what looks like roughly even spacing in the plane of the page. That's a 2D convention, not a spatial fact — and the Lewis can't show you what the 3D arrangement actually is.",
+    molecule: 'xef2',
+    focus: 'lewis-isolation',
+    cue: 'panel-lewis',
   },
   {
-    text: "Try clicking each panel. See what each one captures — and what it leaves out.",
-    molecule: 'methane',
-    focus: 'panels-explore',
+    text:
+      "Click through each of the three panels below to see what each one captures.",
+    molecule: 'xef2',
+    focus: 'lewis-isolation',
+    cue: 'panels-row',
     gate: 'panels-explored',
   },
   {
-    text: "Notice how the Lewis structure doesn't tell you about angles? That's by design. It's just a bookkeeping tool for electrons. When your professor draws a Lewis structure on the board, they're not telling you what the molecule looks like in space — that's a different question for a different diagram.",
-    molecule: 'methane',
-    focus: 'lewis-omits',
+    text:
+      "All three lone pairs sit in the equatorial plane, perpendicular to the F-Xe-F axis. That's why the F's end up axial, and why the molecule is linear.",
+    molecule: 'xef2',
+    focus: 'equatorial-reveal',
+    cue: 'viewport',
   },
   {
-    text: "Let's switch to a molecule where this gets interesting.",
-    molecule: 'ammonia',
-    focus: 'ammonia-lewis',
+    text:
+      "Take a sec to rotate the molecule — you'll want to see how the lone pairs sit relative to the F atoms.",
+    molecule: 'xef2',
+    focus: 'equatorial-reveal',
+    cue: 'viewport',
+    gate: 'rotation',
   },
 ]
 
-// ----------------------------------------------------------------------
-// Prediction 1 — Lewis-tells-shape question on ammonia.
-// Three options + free-text. The correct answer ("no, Lewis doesn't carry
-// shape") is option 3. The two wrong options are distinct misreads.
-// ----------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Prediction 1 — why are the lone pairs in the equatorial plane?
+// ---------------------------------------------------------------------------
 
-export const PREDICTION_1: { framing: string; options: PredictionOption[] } = {
+export const PREDICTION_1: {
+  framing: string
+  options: PredictionOption<Prediction1Key>[]
+} = {
   framing:
-    "Quick check. The Lewis structure for ammonia shows three N–H bonds and one lone pair on nitrogen. If you only had the Lewis structure to go on — could you tell me what shape this molecule is in 3D?",
+    "Quick question. Why do you think the lone pairs ended up in the equatorial plane instead of, say, the axial positions where the F's are now?",
   options: [
     {
-      id: 'flat',
-      label: "Yes — it's flat, with the lone pair sitting on top of the nitrogen.",
+      id: 'notational',
+      label: "The lone pairs were just drawn that way; it's arbitrary.",
       isCorrect: false,
-      misconceptionTag: 'shape-flat',
+    },
+    {
+      id: 'equatorial',
+      label: "Equatorial positions have more space — fewer 90° neighbors.",
+      isCorrect: true,
+    },
+    {
+      id: 'atoms-push',
+      label: "The F atoms are bigger and push the lone pairs to the equator.",
+      isCorrect: false,
+    },
+  ],
+}
+
+// ---------------------------------------------------------------------------
+// Reveal 1 — branched per misconception.
+// Each branch ends by toggling the 180° bond angle and explaining linear MG.
+// ---------------------------------------------------------------------------
+
+const SHARED_BOND_ANGLE_BEAT: Bubble = {
+  text:
+    "Once the lone pairs claim the equatorial plane, the F's only have the axial positions left. Two axial positions opposite each other means the F-Xe-F angle is 180°. That's why the molecular geometry is linear, even though the electron-domain geometry is trigonal bipyramidal. The chart's not lying to you — it's just compressing this whole spatial story into one cell.",
+  molecule: 'xef2',
+  focus: 'axial-bond-angle',
+  cue: 'bond-angles-toggle',
+}
+
+const NOTATIONAL_REVEAL_1: Bubble[] = [
+  {
+    text:
+      "The drawing doesn't tell you that, you're right — but the position isn't arbitrary. There's a real geometric reason. Watch what happens if we put a lone pair in an axial position instead.",
+    molecule: 'xef2-axial-strain',
+    focus: 'axial-strain',
+  },
+  {
+    text:
+      "An axial lone pair has three other groups at 90°. Axial positions are cramped. Equatorial positions only have two 90° neighbors. Lone pairs need elbow room, so they take the roomier seats.",
+    molecule: 'xef2-axial-strain',
+    focus: 'axial-strain',
+  },
+  { ...SHARED_BOND_ANGLE_BEAT, molecule: 'xef2' },
+]
+
+const EQUATORIAL_REVEAL_1: Bubble[] = [
+  {
+    text:
+      "Right. An axial position has three other groups at 90° to it. Equatorial only has two. Lone pairs are bigger than bonded pairs — they need elbow room — so they take the roomier seats.",
+    molecule: 'xef2-axial-strain',
+    focus: 'axial-strain',
+  },
+  {
+    text:
+      "You can see it here — that's what XeF2 would look like if one lone pair were axial. The three neighbors at 90° crowd it. The real molecule avoids that by putting all three lone pairs equatorial.",
+    molecule: 'xef2-axial-strain',
+    focus: 'axial-strain',
+  },
+  { ...SHARED_BOND_ANGLE_BEAT, molecule: 'xef2' },
+]
+
+const ATOMS_PUSH_REVEAL_1: Bubble[] = [
+  {
+    text:
+      "It's actually the reverse: lone pairs take more space than bonded pairs, so they push the F's around, not the other way. Your blocking intuition was right about the direction — the lone pairs claim the roomier positions.",
+    molecule: 'xef2',
+    focus: 'equatorial-reveal',
+  },
+  {
+    text:
+      "Equatorial seats have only two neighbors at 90°. Axial seats have three. So the lone pairs take equatorial; the F atoms are stuck with axial.",
+    molecule: 'xef2-axial-strain',
+    focus: 'axial-strain',
+  },
+  { ...SHARED_BOND_ANGLE_BEAT, molecule: 'xef2' },
+]
+
+const UNCLASSIFIED_REVEAL_1: Bubble[] = [
+  {
+    text:
+      "Interesting. Here's what's going on — check it against what you were thinking. Lone pairs take more space than bonded pairs, so they claim the roomier seats in the molecule.",
+    molecule: 'xef2-axial-strain',
+    focus: 'axial-strain',
+  },
+  {
+    text:
+      "Equatorial positions have only two neighbors at 90°. Axial has three. Lone pairs go equatorial because there's more room.",
+    molecule: 'xef2-axial-strain',
+    focus: 'axial-strain',
+  },
+  { ...SHARED_BOND_ANGLE_BEAT, molecule: 'xef2' },
+]
+
+export const REVEAL_1_PATHS: Record<Prediction1Key, ArtifactPath> = {
+  notational: { reveal1: NOTATIONAL_REVEAL_1 },
+  equatorial: { reveal1: EQUATORIAL_REVEAL_1 },
+  'atoms-push': { reveal1: ATOMS_PUSH_REVEAL_1 },
+  unclassified: { reveal1: UNCLASSIFIED_REVEAL_1 },
+}
+
+// ---------------------------------------------------------------------------
+// Prediction 2 — extending the insight: 5 domains, 2 lone pairs → shape?
+// ---------------------------------------------------------------------------
+
+export const PREDICTION_2: {
+  framing: string
+  options: PredictionOption<Prediction2Key>[]
+} = {
+  framing:
+    "Want to test the idea? Here's a related case: 5 domains, but with 2 lone pairs instead of 3. What shape do you predict?",
+  options: [
+    {
+      id: 'linear',
+      label: "Linear, same as XeF2.",
+      isCorrect: false,
+    },
+    {
+      id: 'tshape',
+      label: "T-shaped — the F's form a T around the central atom.",
+      isCorrect: true,
     },
     {
       id: 'pyramidal',
-      label: "Yes — it's pyramidal, three hydrogens fanning out below the lone pair.",
+      label: "Trigonal pyramidal.",
       isCorrect: false,
-      misconceptionTag: 'shape-pyramidal',
-    },
-    {
-      id: 'truth',
-      label: "No — Lewis structures don't really carry shape information.",
-      isCorrect: true,
-      misconceptionTag: 'truth',
     },
   ],
 }
 
-// ----------------------------------------------------------------------
-// Shared post-reveal-1 beats that ALL paths converge into: the "lone pair
-// takes space" reveal (Beat 8), the ammonium toggle moment, and the
-// transition to water (Beat 9 prose). Authored once, referenced from each
-// path's reveal1 array so each branch can prepend its honor-then-correct
-// bubbles in front.
-// ----------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Reveal 2 — morph to ClF3, then closing.
+// ---------------------------------------------------------------------------
 
-const SHARED_LONE_PAIR_BEATS: Bubble[] = [
+const SHARED_TSHAPE_BEAT: Bubble = {
+  text:
+    "Same rule: lone pairs take equatorial. Two lone pairs leave room for one equatorial F and two axial F's, forming a T. If you'd had only one lone pair, you'd get a see-saw. The whole row of your chart is one consistent story.",
+  molecule: 'clf3',
+  focus: 'clf3-tshape',
+}
+
+const LINEAR_REVEAL_2: Bubble[] = [
   {
-    text: "Here's the thing your textbook is bad at showing. That lone pair isn't just notation — it's a region of electron density that physically occupies space, just like a bond does. Watch.",
-    molecule: 'ammonia',
-    focus: 'lone-pair-spatial',
+    text:
+      "Close — but lone-pair count changes things. With 2 lone pairs instead of 3, you free up one of the equatorial seats. That third equatorial slot now has an F in it.",
+    molecule: 'clf3',
+    focus: 'clf3-tshape',
   },
-  {
-    text: "If we strip the lone pair off — say, by protonating nitrogen — we get ammonium, NH4⁺. No lone pair, four bonded pairs, fully tetrahedral. The lone pair is exactly what makes ammonia pyramidal.",
-    molecule: 'ammonium',
-    focus: 'ammonium-tetrahedral',
-  },
-  {
-    text: "You can toggle the lone pair on and off with the chip up top to watch the geometry breathe. The angle springs from 107° toward 109.5° as soon as the lone pair leaves.",
-    molecule: 'ammonia',
-    focus: 'lone-pair-spatial',
-  },
+  SHARED_TSHAPE_BEAT,
 ]
 
-// ----------------------------------------------------------------------
-// Per-misconception branches for prediction 1.
-// reveal1 honors the user's mental model BEFORE relocating it, then merges
-// into the shared lone-pair-takes-space content.
-// ----------------------------------------------------------------------
+const TSHAPE_REVEAL_2: Bubble[] = [
+  {
+    text:
+      "Yep — T-shape. Two lone pairs claim two of the three equatorial seats, the third equatorial seat is an F, and the two axial F's stay put. You're looking at ClF3.",
+    molecule: 'clf3',
+    focus: 'clf3-tshape',
+  },
+  SHARED_TSHAPE_BEAT,
+]
 
-const FLAT_PATH: ArtifactPath = {
-  reveal1: [
-    {
-      text: "It's tempting to read shape into the Lewis structure — but those positions around the nitrogen are just drawn that way for clarity on the page. The lone pair sitting 'on top' is a 2D convention, not a 3D claim.",
-      molecule: 'ammonia',
-      focus: 'ammonia-lewis',
-    },
-    {
-      text: "Lewis deliberately doesn't tell you about angles or directions in space. It's an electron-bookkeeping tool, not a geometry diagram. Watch what ammonia actually looks like.",
-      molecule: 'ammonia',
-      focus: 'lone-pair-spatial',
-    },
-    ...SHARED_LONE_PAIR_BEATS,
-  ],
-  followUp: {
-    framing: "Water has two lone pairs on oxygen. What do you think happens to the H–O–H bond angle compared to ammonia's 107°?",
-    options: [
-      {
-        id: 'same',
-        label: 'About the same — both have lone pairs, so ~107°.',
-        isCorrect: false,
-        misconceptionTag: 'shape-flat',
-      },
-      {
-        id: 'smaller',
-        label: 'Smaller — closer to 104°.',
-        isCorrect: true,
-        misconceptionTag: 'truth',
-      },
-      {
-        id: 'larger',
-        label: 'Larger — the lone pairs push the bonds wider, maybe ~120°.',
-        isCorrect: false,
-        misconceptionTag: 'shape-flat',
-      },
-    ],
+const PYRAMIDAL_REVEAL_2: Bubble[] = [
+  {
+    text:
+      "Trigonal pyramidal is a 4-domain shape — that's ammonia, the row above. Here we still have 5 domains, just fewer lone pairs. The arrangement stays trigonal bipyramidal underneath; only the visible shape changes.",
+    molecule: 'clf3',
+    focus: 'clf3-tshape',
   },
-  reveal2: {
-    same: [
-      {
-        text: "Close, but lone pairs aren't all the same — two lone pairs push harder than one. Adding another lone pair compresses the bond angle further.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-      {
-        text: "Water comes in at ~104.5°. Each lone pair occupies more space than a bonded pair, so two of them crowd the H–O–H bonds tighter than ammonia's H–N–H bonds.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-    ],
-    smaller: [
-      {
-        text: "Yep — ~104.5°. Two lone pairs push even harder than one. The bond angle compresses.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-      {
-        text: "That's the move: each electron pair takes up space, and lone pairs take more than bonded ones. More lone pairs = tighter bonded-pair angles.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-    ],
-    larger: [
-      {
-        text: "Other way around — lone pairs squeeze bonded pairs tighter, not wider apart. They take up MORE space than a bonded pair, so they push the bonds closer together.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-      {
-        text: "Water lands at ~104.5°. Two lone pairs compress the H–O–H angle below ammonia's 107°.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-    ],
+  SHARED_TSHAPE_BEAT,
+]
+
+const UNCLASSIFIED_REVEAL_2: Bubble[] = [
+  {
+    text:
+      "Here's what happens with 2 lone pairs. Two equatorial seats are claimed by lone pairs; one equatorial seat is an F; the two axial seats are F's. Result: a T-shape.",
+    molecule: 'clf3',
+    focus: 'clf3-tshape',
   },
+  SHARED_TSHAPE_BEAT,
+]
+
+export const REVEAL_2_PATHS: Record<Prediction2Key, Bubble[]> = {
+  linear: LINEAR_REVEAL_2,
+  tshape: TSHAPE_REVEAL_2,
+  pyramidal: PYRAMIDAL_REVEAL_2,
+  unclassified: UNCLASSIFIED_REVEAL_2,
 }
 
-const PYRAMIDAL_PATH: ArtifactPath = {
-  reveal1: [
-    {
-      text: "Pyramidal IS the right shape — but you got there for the wrong reason. Lewis doesn't actually encode geometry. You can read 'three bonds and one lone pair' off it, but the 'pyramidal' part isn't in the picture — you're filling that in from somewhere else.",
-      molecule: 'ammonia',
-      focus: 'ammonia-lewis',
-    },
-    {
-      text: "Worth catching, because it'll bite you on molecules where the shape is less familiar. Lewis is bookkeeping; geometry comes from the 3D picture and the VSEPR chart.",
-      molecule: 'ammonia',
-      focus: 'lone-pair-spatial',
-    },
-    ...SHARED_LONE_PAIR_BEATS,
-  ],
-  followUp: {
-    framing: "Water has two lone pairs on oxygen. What do you think happens to the H–O–H bond angle compared to ammonia's 107°?",
-    options: [
-      {
-        id: 'same',
-        label: 'About the same — both have lone pairs, so ~107°.',
-        isCorrect: false,
-        misconceptionTag: 'shape-pyramidal',
-      },
-      {
-        id: 'smaller',
-        label: 'Smaller — closer to 104°.',
-        isCorrect: true,
-        misconceptionTag: 'truth',
-      },
-      {
-        id: 'larger',
-        label: 'Larger — the lone pairs push the bonds wider, maybe ~120°.',
-        isCorrect: false,
-        misconceptionTag: 'shape-pyramidal',
-      },
-    ],
-  },
-  reveal2: {
-    same: [
-      {
-        text: "Close, but lone pairs aren't all the same — two lone pairs push harder than one. Adding another lone pair compresses the bond angle further.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-      {
-        text: "Water comes in at ~104.5°. Each lone pair occupies more space than a bonded pair, so two of them crowd the H–O–H bonds tighter than ammonia's H–N–H bonds.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-    ],
-    smaller: [
-      {
-        text: "Yep — ~104.5°. Two lone pairs push even harder than one. The bond angle compresses.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-      {
-        text: "That's the move: each electron pair takes up space, and lone pairs take more than bonded ones. More lone pairs = tighter bonded-pair angles.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-    ],
-    larger: [
-      {
-        text: "Other way around — lone pairs squeeze bonded pairs tighter, not wider apart. They take up MORE space than a bonded pair, so they push the bonds closer together.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-      {
-        text: "Water lands at ~104.5°. Two lone pairs compress the H–O–H angle below ammonia's 107°.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-    ],
-  },
-}
-
-const TRUTH_PATH: ArtifactPath = {
-  reveal1: [
-    {
-      text: "Right — Lewis is just electron bookkeeping. Three bonds and a lone pair is all it tells you. The shape comes from the 3D picture and the VSEPR chart, not from the dots.",
-      molecule: 'ammonia',
-      focus: 'ammonia-lewis',
-    },
-    ...SHARED_LONE_PAIR_BEATS,
-  ],
-  followUp: {
-    framing: "Water has two lone pairs on oxygen. What do you think happens to the H–O–H bond angle compared to ammonia's 107°?",
-    options: [
-      {
-        id: 'same',
-        label: 'About the same — both have lone pairs, so ~107°.',
-        isCorrect: false,
-        misconceptionTag: 'truth',
-      },
-      {
-        id: 'smaller',
-        label: 'Smaller — closer to 104°.',
-        isCorrect: true,
-        misconceptionTag: 'truth',
-      },
-      {
-        id: 'larger',
-        label: 'Larger — the lone pairs push the bonds wider, maybe ~120°.',
-        isCorrect: false,
-        misconceptionTag: 'truth',
-      },
-    ],
-  },
-  reveal2: {
-    same: [
-      {
-        text: "Close, but lone pairs aren't all the same — two lone pairs push harder than one. Adding another lone pair compresses the bond angle further.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-      {
-        text: "Water comes in at ~104.5°. Each lone pair occupies more space than a bonded pair, so two of them crowd the H–O–H bonds tighter than ammonia's H–N–H bonds.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-    ],
-    smaller: [
-      {
-        text: "Yep — ~104.5°. Two lone pairs push even harder than one. The bond angle compresses.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-      {
-        text: "That's the move: each electron pair takes up space, and lone pairs take more than bonded ones. More lone pairs = tighter bonded-pair angles.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-    ],
-    larger: [
-      {
-        text: "Other way around — lone pairs squeeze bonded pairs tighter, not wider apart. They take up MORE space than a bonded pair, so they push the bonds closer together.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-      {
-        text: "Water lands at ~104.5°. Two lone pairs compress the H–O–H angle below ammonia's 107°.",
-        molecule: 'water',
-        focus: 'water-bond-angle',
-      },
-    ],
-  },
-}
-
-// Fallback path for free-text answers we can't classify. Skip the
-// honor-then-correct dance and go straight to "here's what's going on,
-// check that against your hypothesis."
-const UNCLASSIFIED_PATH: ArtifactPath = {
-  reveal1: [
-    {
-      text: "Interesting. Let me show you what's actually going on, and you can check it against what you were thinking.",
-      molecule: 'ammonia',
-      focus: 'ammonia-lewis',
-    },
-    {
-      text: "Lewis structures are electron bookkeeping — three N–H bonds, one lone pair. They don't carry geometry. The shape lives somewhere else.",
-      molecule: 'ammonia',
-      focus: 'lone-pair-spatial',
-    },
-    ...SHARED_LONE_PAIR_BEATS,
-  ],
-  followUp: TRUTH_PATH.followUp,
-  reveal2: TRUTH_PATH.reveal2,
-}
-
-export const PATHS: Record<MisconceptionKey, ArtifactPath> = {
-  'shape-flat': FLAT_PATH,
-  'shape-pyramidal': PYRAMIDAL_PATH,
-  truth: TRUTH_PATH,
-  unclassified: UNCLASSIFIED_PATH,
-}
-
-// ----------------------------------------------------------------------
-// Closing — one bubble carrying the representation-literacy insight that
-// the whole artifact has been building toward. The artifact ends pointing
-// past itself (toward external 3D viewers and toward organic chemistry).
-// ----------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Closing — one bubble that ties the whole arc together. The summary card
+// (rendered alongside the resources panel) carries the screenshot-friendly
+// takeaway.
+// ---------------------------------------------------------------------------
 
 export const CLOSING_BUBBLE: Bubble = {
-  text: "Here's the move. The Lewis structure is for tracking electrons. The geometry chart is for predicting shape. The 3D view is what they're both trying to describe. Once you can see the molecule in 3D, the chart starts making sense as a description instead of a rule to memorize — and when organic chemistry rolls around, you'll be tracking these shapes through reactions, way easier if you can already see them.",
+  text:
+    "Here's the move. Your chart compresses every 5-domain shape into one row, but they're all the same underlying idea: lone pairs claim equatorial positions because there's more space, and the F's get whatever's left over. Linear, T-shape, see-saw — same logic, different number of lone pairs. The wedge-and-dash drawings can't show you that, which is why the row feels arbitrary. Once you see the 3D version, the chart starts making sense as a description instead of a rule to memorize.",
+  molecule: 'xef2',
   focus: 'closing',
+}
+
+export type SummaryCardLine = string
+
+export const SUMMARY_CARD: {
+  title: string
+  lines: SummaryCardLine[]
+} = {
+  title: "XeF2 — what to remember",
+  lines: [
+    "Linear molecular geometry, trigonal bipyramidal electron-domain geometry.",
+    "3 lone pairs sit in the equatorial plane; 2 F atoms stay axial.",
+    "Why equatorial: only two 90° neighbors instead of three — more space.",
+    "Same logic across the row: 1 LP → see-saw, 2 LP → T-shape, 3 LP → linear.",
+  ],
 }
 
 export const RESOURCES: Resource[] = [
   {
-    title: 'MolView — interactive 3D viewer',
+    title: 'MolView — rotate any molecule yourself',
     url: 'https://molview.org/',
     source: 'molview.org',
   },
   {
-    title: 'VSEPR theory',
+    title: 'VSEPR theory primer',
     url: 'https://en.wikipedia.org/wiki/VSEPR_theory',
     source: 'Wikipedia',
   },
 ]
 
-// ----------------------------------------------------------------------
-// Free-text classifier — simple keyword heuristic. Maps the user's free
-// response to the closest of the three structural misreads, or
-// 'unclassified' for the generic "interesting, let me show you" path.
-// ----------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Free-text classifiers — simple keyword heuristics.
+// ---------------------------------------------------------------------------
 
-export function classifyFreeText(text: string): MisconceptionKey {
+export function classifyPrediction1FreeText(text: string): Prediction1Key {
   const t = text.toLowerCase()
 
-  // Truth indicators: explicit acknowledgment that Lewis doesn't encode
-  // shape / geometry / angles.
-  const truthSignals = [
-    "doesn't carry",
-    "doesn't tell",
-    "doesn't show",
-    "doesn't encode",
-    'no shape',
-    'no geometry',
-    'no angle',
-    'bookkeeping',
-    'electron count',
-    'just electrons',
-    'just dots',
-    'just bonds',
-    'not in lewis',
-    'lewis is for',
-    'lewis only',
+  const equatorialSignals = [
+    'more space',
+    'more room',
+    'roomier',
+    'less crowded',
+    'fewer neighbors',
+    'fewer 90',
+    '90 degree',
+    '90°',
+    'equatorial',
+    'elbow room',
   ]
-  if (truthSignals.some((s) => t.includes(s))) return 'truth'
+  if (equatorialSignals.some((s) => t.includes(s))) return 'equatorial'
 
-  // Flat indicators: language about lying flat, top-down, lone pair on top,
-  // planar, 2D-as-truth.
-  const flatSignals = [
-    'flat',
-    'planar',
-    'top down',
-    'top-down',
-    'on top',
-    'above the',
-    'sits on top',
-    'looks flat',
-    'in a plane',
+  const notationalSignals = [
+    'arbitrary',
+    'just drawn',
+    'just notation',
+    'convention',
+    'random',
+    'no reason',
+    'no specific',
   ]
-  if (flatSignals.some((s) => t.includes(s))) return 'shape-flat'
+  if (notationalSignals.some((s) => t.includes(s))) return 'notational'
 
-  // Pyramidal indicators: arriving at the right answer via Lewis (right
-  // answer wrong reason).
-  const pyramidalSignals = [
-    'pyramidal',
-    'pyramid',
-    'tetrahedral',
-    'three down',
-    'three below',
-    'three at the bottom',
-    'fanning out',
-    'pointing down',
+  const atomsPushSignals = [
+    'f atoms push',
+    'fluorine push',
+    'atoms push',
+    'f is bigger',
+    'fluorine is bigger',
+    'pushed by',
   ]
-  if (pyramidalSignals.some((s) => t.includes(s))) return 'shape-pyramidal'
+  if (atomsPushSignals.some((s) => t.includes(s))) return 'atoms-push'
+
+  return 'unclassified'
+}
+
+export function classifyPrediction2FreeText(text: string): Prediction2Key {
+  const t = text.toLowerCase()
+
+  if (t.includes('t-shape') || t.includes('t shape') || t.includes('tshape') || t.includes('t-shaped'))
+    return 'tshape'
+  if (t.includes('linear') || t.includes('straight line') || t.includes('180')) return 'linear'
+  if (t.includes('pyramidal') || t.includes('pyramid')) return 'pyramidal'
 
   return 'unclassified'
 }

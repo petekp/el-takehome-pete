@@ -1,7 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { ENVELOPE_CONTENT_TYPE, EnvelopeEncoder } from '@/lib/protocol'
-import { CONCEPTS, getConcept, type Concept, type ConceptId } from '@/lib/concepts'
-import { withBackoff } from '@/lib/retry'
+import {
+  clientMatchTrigger,
+  CONCEPTS,
+  getConcept,
+  type Concept,
+  type ConceptId,
+} from '@/lib/concepts'
+import { defaultRetryable, withBackoff } from '@/lib/retry'
 
 // Node runtime (Fluid Compute on Vercel). The classifier requires tool-use,
 // which doesn't run reliably on the edge runtime.
@@ -10,6 +16,21 @@ const apiKey = process.env.ANTHROPIC_API_KEY
 
 const CLASSIFIER_MODEL = 'claude-haiku-4-5'
 const AFFORDANCE_MODEL = 'claude-sonnet-4-6'
+
+type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
+
+type IncomingMessage = {
+  role: 'user' | 'assistant'
+  content:
+    | string
+    | Array<
+        | { type: 'text'; text: string }
+        | {
+            type: 'image'
+            source: { type: 'base64'; media_type: ImageMediaType; data: string }
+          }
+      >
+}
 
 type ClassifierResult = {
   conceptId: ConceptId | null
@@ -45,22 +66,60 @@ function classifierSystemPrompt(): string {
   ).join('\n\n')
   return [
     'You are a classifier that decides whether an incoming user message belongs to a',
-    'registered learning concept. Be conservative — only return a conceptId if the',
-    'message clearly matches the concept\'s criteria. If the user is asking a generic',
-    'question with no clear concept signal, return null.',
+    'registered learning concept. The user may include image attachments — treat them',
+    'as part of the message: a handwritten VSEPR chart or a Lewis-structure drawing of',
+    'XeF2 alongside the text is a stronger signal, not a weaker one.',
+    '',
+    'Be reasonably permissive — if the message clearly fits the criteria, return the',
+    'conceptId. If the message is a generic question with no concept signal, return null.',
     '',
     'Concepts:',
     conceptLines,
   ].join('\n')
 }
 
-async function classify(client: Anthropic, latestUserMessage: string): Promise<ClassifierResult> {
+/**
+ * Build the latest user message in a form the classifier can consume. The
+ * classifier model handles images natively, so we pass the same content
+ * blocks through.
+ */
+function latestUserBlocks(messages: IncomingMessage[]): IncomingMessage['content'] | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') return messages[i].content
+  }
+  return null
+}
+
+function flattenUserText(content: IncomingMessage['content']): string {
+  if (typeof content === 'string') return content
+  return content
+    .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n')
+}
+
+async function classify(
+  client: Anthropic,
+  latestContent: IncomingMessage['content'],
+): Promise<ClassifierResult> {
+  // Short-circuit on the keyword heuristic: when the user's text clearly
+  // matches a concept (e.g. "XeF2" + lone-pair language), skip the
+  // model round-trip. Cheaper and bulletproof for the demo trigger.
+  const flat = flattenUserText(latestContent)
+  const heuristic = clientMatchTrigger(flat)
+  if (heuristic) {
+    return {
+      conceptId: heuristic,
+      reasoning: 'keyword heuristic matched on user text',
+    }
+  }
+
   const res = await withBackoff(() =>
     client.messages.create({
       model: CLASSIFIER_MODEL,
       max_tokens: 512,
       system: classifierSystemPrompt(),
-      messages: [{ role: 'user', content: latestUserMessage }],
+      messages: [{ role: 'user', content: latestContent }],
       tools: [CLASSIFIER_TOOL],
       tool_choice: { type: 'tool', name: CLASSIFIER_TOOL.name },
     }),
@@ -78,13 +137,17 @@ async function classify(client: Anthropic, latestUserMessage: string): Promise<C
 
 function affordanceSystemPrompt(concept: Concept): string {
   return [
-    `You are Claude, talking with a student who's just hit a question about ${concept.descriptors.title}.`,
+    `You are Claude, talking with a returning gen-chem student who is grinding through molecular geometry. She has just asked about ${concept.descriptors.title}.`,
     '',
-    "They want to know why ammonia is pyramidal but methane is tetrahedral. You CAN just answer that — but the real gap underneath is that their textbook keeps showing the same molecule in different 2D notations (Lewis structures, geometry charts, wedge-and-dash) without ever showing them the underlying 3D structure those notations are gesturing at. The chart isn't doing it for them. You're going to offer them an easy choice: just give the short verbal answer, or take a minute to look at the molecule together first.",
+    "Her question is about XeF2 — 5 electron domains, 3 lone pairs, molecular geometry linear, electron-domain geometry trigonal bipyramidal. She has attached two photos: her course's VSEPR molecular-geometry chart (with handwritten annotations) and her own Lewis structure for XeF2 with three lone pairs on Xe. She thinks the lone pairs are physically blocking any bonds from forming on Xe, and she finds the wedge-and-dash drawing in the chart confusing.",
     '',
-    'Your response is two short beats of conversational prose. No headings, no bullets, no lists, no labels like "Option A". No announcement that this is a learning feature. Two sentences, maybe three. The voice is a jovial knowledgeable friend who remembers what it was like to take chemistry — not a tutor, not a chemistry professor.',
+    "Her intuition is HALF right: yes, lone pairs occupy space and push F's around. The half that's off is the spatial part — the three lone pairs sit in the equatorial plane of a trigonal bipyramid, and the two F atoms end up axial, which is exactly why the molecule is linear. The 2D Lewis structure can't show her that.",
     '',
-    'Concretely: one sentence saying you can just answer it, but it sounds like the chart isn\'t doing it and there\'s a thing about how textbook representations work that might help first. One sentence offering the choice in plain language — something like "want to look at it together first, or should I just answer it?" The offer is light, easy to decline. Do not write the button labels yourself; just emit the tag.',
+    'You can just answer her directly — but the real gap is spatial, and a verbal answer alone will land flat. Offer to look at the molecule together first.',
+    '',
+    "Your response is two short beats of conversational prose. Reference the attachments directly — you can see her chart and her Lewis structure. Acknowledge her intuition by name (her word is \"blocking\"). No headings, no bullets, no lists, no labels like \"Option A\". Two to four short sentences. The voice is a jovial knowledgeable friend who remembers what it was like to take chemistry — not a tutor, not a chemistry professor.",
+    '',
+    "Concretely: open by naming what you can see — the row on the chart she's stuck on and her Lewis drawing — and validate that the wedge-and-dash is genuinely confusing for this cell. Then one sentence saying her blocking intuition is half-right and the half that's off is the spatial part. Then offer the choice in plain language — something like \"want to look at it together first, or should I just answer it?\" The offer is light, easy to decline. Do not write the button labels yourself; just emit the tag.",
     '',
     'End your message with EXACTLY this on its own line, with nothing after it:',
     '<affordance/>',
@@ -100,19 +163,18 @@ export async function POST(req: Request) {
 
   const body = (await req.json()) as {
     model: string
-    messages: Array<{ role: 'user' | 'assistant'; content: string }>
+    messages: IncomingMessage[]
   }
   const { model, messages } = body
   const client = new Anthropic({ apiKey })
-  const latestUserMessage =
-    [...messages].reverse().find((m) => m.role === 'user')?.content ?? ''
+  const latestContent = latestUserBlocks(messages) ?? ''
 
   // 1. Classify. Failures fall through to non-arc chat — never block the chat
   //    response on a flaky classifier.
   let classified: ClassifierResult = { conceptId: null, reasoning: '' }
-  if (latestUserMessage) {
+  if (latestContent) {
     try {
-      classified = await classify(client, latestUserMessage)
+      classified = await classify(client, latestContent)
     } catch (err) {
       console.error('Classifier failed; falling back to normal chat', err)
     }
@@ -137,23 +199,35 @@ export async function POST(req: Request) {
         envelope.meta({ isArc: false, reasoning: classified.reasoning })
       }
 
+      // Retry transient upstream failures (5xx/429) — but only before any
+      // tokens have hit the wire. Once we've started streaming text the
+      // envelope is past the point of no return; retrying would double-write.
+      let textEmitted = false
+      const streamArgs =
+        isArc && concept
+          ? {
+              model: AFFORDANCE_MODEL,
+              max_tokens: 1024,
+              system: affordanceSystemPrompt(concept),
+              messages,
+            }
+          : {
+              model,
+              max_tokens: 8096,
+              messages,
+            }
       try {
-        const messageStream = client.messages.stream(
-          isArc && concept
-            ? {
-                model: AFFORDANCE_MODEL,
-                max_tokens: 1024,
-                system: affordanceSystemPrompt(concept),
-                messages,
-              }
-            : {
-                model,
-                max_tokens: 8096,
-                messages,
-              },
+        await withBackoff(
+          async () => {
+            const messageStream = client.messages.stream(streamArgs)
+            messageStream.on('text', (delta) => {
+              textEmitted = true
+              envelope.text(delta)
+            })
+            await messageStream.finalMessage()
+          },
+          { isRetryable: (err) => !textEmitted && defaultRetryable(err) },
         )
-        messageStream.on('text', (delta) => envelope.text(delta))
-        await messageStream.finalMessage()
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown upstream error'
         envelope.error(message, true)

@@ -33,7 +33,7 @@ export async function withBackoff<T>(
   }
 }
 
-function defaultRetryable(err: unknown): boolean {
+export function defaultRetryable(err: unknown): boolean {
   // Anthropic SDK errors expose .status; Node fetch errors have a code; the
   // rest we treat as transient unless they're clearly client-side (400/401/403/404/422).
   const status = getStatus(err)

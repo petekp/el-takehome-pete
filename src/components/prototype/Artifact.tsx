@@ -1,40 +1,106 @@
 'use client'
 
-import { useState } from 'react'
-import { ChevronLeft, ChevronRight, ExternalLink, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { AnimatePresence, motion, type Variants } from 'motion/react'
+import {
+  BookOpen,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Expand,
+  Maximize2,
+  Minimize2,
+  Share2,
+  X,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
+  activeCue,
   bubblesForStage,
-  followUpFor,
+  gateProgress,
+  PREDICTION_1,
+  PREDICTION_2,
   usePrototypeStore,
-  type ArtifactPrediction,
+  type ArtifactPrediction1,
+  type ArtifactPrediction2,
   type ArtifactStage,
+  type ArtifactState,
 } from '@/lib/prototype-store'
 import {
-  PREDICTION_1,
   RESOURCES,
+  SUMMARY_CARD,
   type Bubble,
   type PredictionOption,
+  type Prediction1Key,
+  type Prediction2Key,
 } from '@/lib/artifact-script'
 import { MoleculeScene } from './MoleculeScene'
-import { ToggleChips } from './ToggleChips'
-import { RepresentationPanels } from './RepresentationPanels'
+import { ViewportControls } from './ToggleChips'
+import { MaterialsLightbox, PanelDiagram, RepresentationPanels } from './RepresentationPanels'
+import type { ImageAttachment } from '@/lib/types'
 
 /**
  * The inline artifact — the single core surface the prototype is built
  * around.
  *
- * Triggered by Streamdown when it encounters the `<artifact/>` tag in an
- * assistant message. Reads state from PrototypeStore — the message is just
- * the placeholder; the surface is fully state-driven.
+ * v4 polish: the right pane became a state machine. At any moment it shows
+ * exactly one of:
+ *   - Bubble state  (an active bubble, centered with breathing room)
+ *   - Predict state (the prediction question + options + free-text)
+ *   - Reveal state  (the first bubble of the reveal sequence, plus a
+ *                    "You said" attribution chip)
+ *   - Closing state (the closing bubble + summary card + resources + Done)
  *
- * Layout (per the chemistry spec):
- *   left 2/3:  ToggleChips → MoleculeScene → RepresentationPanels
- *   right 1/3: bubble track (top/middle) + prediction surface OR resources (bottom)
+ * Below it sits a persistent stepper: Back / position / Next. Guided
+ * interaction beats add a gate-progress line above the stepper plus a
+ * "Skip this and keep going" link after a 10s delay.
  *
- * Bubbles live in the right column — no spatial anchoring on the 3D scene
- * (occlusion problems). Past bubbles partially visible above the active one.
+ * The header carries only the title and a small button cluster (References,
+ * Summary, Close). Both References and Summary open lightweight overlays
+ * accessible at any time during the arc.
  */
+
+// Beats per stage are constant across all prediction branches: 5 + 1 + 3 + 1 + 2 + 1
+const TOTAL_BEATS = 13
+const STAGE_OFFSET: Record<ArtifactStage, number> = {
+  opening: 0,
+  'predict-1': 5,
+  'reveal-1': 6,
+  'predict-2': 9,
+  'reveal-2': 10,
+  closing: 12,
+}
+
+// Right-pane carousel transition. `direction` is read off AnimatePresence's
+// custom prop so the outgoing step slides toward the side the new step came
+// from, while the incoming step slides in from the opposite side. The exit
+// opacity uses its own faster duration so the outgoing content clears out
+// quickly and doesn't visually compete with the incoming content during the
+// horizontal slide.
+const STEP_SLIDE_PX = 36
+type StepDirection = 'forward' | 'back'
+const stepSlideVariants: Variants = {
+  enter: (dir: StepDirection) => ({
+    x: dir === 'back' ? -STEP_SLIDE_PX : STEP_SLIDE_PX,
+    opacity: 0,
+  }),
+  center: { x: 0, opacity: 1 },
+  exit: (dir: StepDirection) => ({
+    x: dir === 'back' ? STEP_SLIDE_PX : -STEP_SLIDE_PX,
+    opacity: 0,
+    transition: {
+      x: { type: 'spring' as const, stiffness: 320, damping: 34, mass: 0.7 },
+      opacity: { duration: 0.08, ease: 'easeOut' as const },
+    },
+  }),
+}
+
+function positionInArc(stage: ArtifactStage, bubbleIndex: number): number {
+  return STAGE_OFFSET[stage] + bubbleIndex + 1
+}
+
+type LiteracyPanel = 'lewis' | 'wedge' | 'geometry'
+
 export function Artifact() {
   const {
     state,
@@ -43,33 +109,54 @@ export function Artifact() {
     recordPrediction1,
     recordPrediction2,
     closeArtifact,
+    addRotation,
+    clickPanel,
   } = usePrototypeStore()
   const arc = state.arc
   const artifact = arc.artifact
 
-  // The tag may render in a chat where the artifact was reset (e.g., user
-  // navigated away and back). Show an inert collapsed state.
+  const [referencesOpen, setReferencesOpen] = useState(false)
+  const [summaryOpen, setSummaryOpen] = useState(false)
+  const [materialsOpen, setMaterialsOpen] = useState(false)
+  const [expandedPanel, setExpandedPanel] = useState<LiteracyPanel | null>(null)
+
+  // Reset expansion whenever the active panel changes underneath (panel
+  // deactivated, switched to another literacy panel, etc.) so we never end
+  // up with an expanded overlay for a panel that isn't even active.
+  useEffect(() => {
+    if (
+      expandedPanel &&
+      (artifact?.activePanel !== expandedPanel ||
+        (artifact.activePanel !== 'lewis' &&
+          artifact.activePanel !== 'wedge' &&
+          artifact.activePanel !== 'geometry'))
+    ) {
+      setExpandedPanel(null)
+    }
+  }, [artifact?.activePanel, expandedPanel])
+
+  useEffect(() => {
+    if (!referencesOpen && !summaryOpen && !materialsOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setReferencesOpen(false)
+        setSummaryOpen(false)
+        setMaterialsOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [referencesOpen, summaryOpen, materialsOpen])
+
   if (!artifact || arc.beat === 'idle') {
     return <ArtifactCollapsed />
   }
 
   // After the user closes the artifact and we've moved to wrapper-followup,
-  // freeze the artifact at the closing state — it stays viewable inline as
-  // a record of what just happened.
+  // freeze the artifact at the closing state — it stays viewable as a
+  // record of what just happened.
   const interactive = arc.beat === 'artifact-active' || arc.beat === 'artifact-resolved'
-
-  const bubbles = bubblesForStage(artifact.stage, artifact.prediction1, artifact.prediction2)
-  const currentBubble = bubbles[artifact.bubbleIndex] ?? null
-  const canRetreat = artifact.bubbleIndex > 0
-  const gateBlocked = isGateBlocked(currentBubble, artifact.panelsClicked.length)
-
-  // Show predict surface during predict-1 / predict-2 stages.
-  const showPredict1 = artifact.stage === 'predict-1' && interactive
-  const showPredict2 = artifact.stage === 'predict-2' && interactive
-  const showResources = artifact.stage === 'closing'
-
-  // After closing bubble, surface the "close" CTA.
-  const showCloseCta = artifact.stage === 'closing' && interactive
+  const summaryAvailable = artifact.prediction1 !== null
 
   return (
     <section
@@ -79,80 +166,124 @@ export function Artifact() {
       )}
       aria-label="Molecular geometry explainer"
     >
-      <Header
-        title="Molecular geometry"
-        stage={artifact.stage}
-        onClose={interactive ? closeArtifact : undefined}
-      />
+      {/* The artifact is one full-bleed 3D viewport with the header, the
+          right pane, and the representation-panels row floating on top of
+          it. MoleculeScene takes top/right/bottom inset values so its
+          safe-area math knows where the overlays sit and can center +
+          zoom the molecule into the remaining visible region. */}
+      <div className="relative h-[480px] max-h-[calc(100dvh-var(--header-height)-var(--composer-height)-90px)] overflow-hidden">
+        <MoleculeScene
+          molecule={artifact.activeMolecule}
+          chipState={artifact.chipState}
+          activePanel={artifact.activePanel}
+          onRotationDelta={addRotation}
+          onExitTreatment={
+            artifact.activePanel ? () => clickPanel(artifact.activePanel!) : undefined
+          }
+          topOverlayInsetPx={64}
+          rightOverlayInsetPx={344}
+          bottomOverlayInsetPx={64}
+          className="absolute inset-0"
+        />
 
-      <div className="grid grid-cols-[1fr_280px] gap-0">
-        {/* Left — 3D viewport on top, representation panels below */}
-        <div className="border-border-soft flex flex-col gap-3 border-r p-4">
-          <ToggleChips />
-          <div className="relative aspect-[4/3] w-full">
-            <MoleculeScene
-              molecule={artifact.activeMolecule}
-              chipState={artifact.chipState}
-              activePanel={artifact.activePanel}
-              className="absolute inset-0"
-            />
-          </div>
+        <Header
+          title="Why XeF₂ is linear"
+          attachments={artifact.userAttachments}
+          cuePulse={activeCue(artifact) === 'panel-materials'}
+          onOpenMaterials={() => setMaterialsOpen(true)}
+          onReferences={() => setReferencesOpen(true)}
+          onClose={interactive ? closeArtifact : undefined}
+        />
+
+        <div className="pointer-events-auto absolute left-3 top-[60px] z-10">
+          <ViewportControls />
+        </div>
+        <ViewportCue artifact={artifact} />
+
+        {/* Representation panels overlay along the bottom, stopping short of
+            the floating right pane so the cards don't slip behind it. */}
+        <div className="pointer-events-auto absolute bottom-3 left-3 right-[340px] z-10">
           <RepresentationPanels />
-          {artifact.activePanel && (
-            <AnnotationFootnote
-              panelId={artifact.activePanel}
-            />
-          )}
         </div>
 
-        {/* Right — bubble track + prediction / resources */}
-        <aside className="bg-page/40 flex h-full flex-col">
-          <BubbleTrack
-            bubbles={bubbles}
-            currentIndex={artifact.bubbleIndex}
+        {/* Right pane as a floating card on top of the visualization. */}
+        <aside
+          className={cn(
+            'absolute bottom-3 right-3 top-[60px] z-10 flex w-[324px] flex-col',
+            'bg-surface/85 border-border-subtle overflow-hidden rounded-md border',
+            'shadow-md backdrop-blur-md',
+          )}
+        >
+          <RightPane
+            artifact={artifact}
             interactive={interactive}
-            canRetreat={canRetreat}
-            gateBlocked={gateBlocked}
-            stage={artifact.stage}
-            panelsClicked={artifact.panelsClicked.length}
+            expandedPanel={expandedPanel}
+            onExpandPanel={setExpandedPanel}
             onAdvance={advanceArtifact}
             onRetreat={retreatArtifact}
+            onSubmitPrediction1={recordPrediction1}
+            onSubmitPrediction2={recordPrediction2}
+            onClose={closeArtifact}
+            onOpenSummary={() => setSummaryOpen(true)}
+            onOpenReferences={() => setReferencesOpen(true)}
           />
-          <div className="border-border-soft border-t px-3.5 py-3.5">
-            {showPredict1 && (
-              <PredictPanel
-                label="Your read"
-                framing={PREDICTION_1.framing}
-                options={PREDICTION_1.options}
-                onSubmit={recordPrediction1}
-              />
+          {/* Expanded-diagram clone overlays the entire right-pane card —
+              including the stepper / gate footer — via motion's layoutId
+              animation. The thumbnail inside the bubble stays in flow with
+              opacity 0 so content position never shifts. */}
+          <AnimatePresence>
+            {expandedPanel && (
+              <motion.div
+                key={`expanded-${expandedPanel}`}
+                layoutId={`panel-diagram-${expandedPanel}`}
+                transition={{ type: 'spring', stiffness: 280, damping: 32, mass: 0.7 }}
+                className={cn(
+                  'bg-surface/95 absolute inset-0 z-30 flex flex-col items-center',
+                  'justify-center gap-3 p-6 backdrop-blur-sm',
+                )}
+              >
+                <button
+                  type="button"
+                  onClick={() => setExpandedPanel(null)}
+                  aria-label="Collapse diagram"
+                  className={cn(
+                    'text-text-tertiary hover:text-text-secondary hover:bg-state-hover',
+                    'absolute right-2 top-2 inline-flex size-7 items-center justify-center rounded-md',
+                    'transition-colors',
+                  )}
+                >
+                  <Minimize2 className="size-4" />
+                </button>
+                <PanelDiagram
+                  panel={expandedPanel}
+                  molecule={artifact.activeMolecule}
+                  expanded
+                />
+                <figcaption className="text-text-tertiary font-serif text-[14px] italic">
+                  {expandedPanel === 'lewis'
+                    ? 'Lewis structure'
+                    : expandedPanel === 'wedge'
+                      ? 'Wedge-and-dash'
+                      : 'Geometry chart'}
+                </figcaption>
+              </motion.div>
             )}
-            {showPredict2 && (
-              <PredictPanel
-                label="One more"
-                framing={followUpFor(artifact.prediction1).framing}
-                options={followUpFor(artifact.prediction1).options}
-                onSubmit={recordPrediction2}
-              />
-            )}
-            {showResources && <ResourcesPanel showCloseCta={showCloseCta} onClose={closeArtifact} />}
-            {!showPredict1 && !showPredict2 && !showResources && (
-              <ContextStrip
-                prediction1={artifact.prediction1}
-                prediction2={artifact.prediction2}
-              />
-            )}
-          </div>
+          </AnimatePresence>
         </aside>
       </div>
+
+      {referencesOpen && <ReferencesOverlay onClose={() => setReferencesOpen(false)} />}
+      {summaryOpen && summaryAvailable && (
+        <SummaryOverlay onClose={() => setSummaryOpen(false)} />
+      )}
+      {materialsOpen && (
+        <MaterialsLightbox
+          attachments={artifact.userAttachments}
+          onClose={() => setMaterialsOpen(false)}
+        />
+      )}
     </section>
   )
-}
-
-function isGateBlocked(bubble: Bubble | null, panelsClickedCount: number): boolean {
-  if (!bubble?.gate) return false
-  if (bubble.gate === 'panels-explored') return panelsClickedCount < 2
-  return false
 }
 
 // ---------------------------------------------------------------------------
@@ -161,252 +292,549 @@ function isGateBlocked(bubble: Bubble | null, panelsClickedCount: number): boole
 
 function Header({
   title,
-  stage,
+  attachments,
+  cuePulse,
+  onOpenMaterials,
+  onReferences,
   onClose,
 }: {
   title: string
-  stage: ArtifactStage
+  attachments: ImageAttachment[]
+  cuePulse: boolean
+  onOpenMaterials: () => void
+  onReferences: () => void
   onClose?: () => void
 }) {
   return (
-    <header className="border-border-soft flex items-center justify-between gap-3 border-b px-4 py-2.5">
-      <div className="flex min-w-0 items-baseline gap-2">
-        <span className="text-text-tertiary text-[10px] uppercase tracking-wide">Explainer</span>
-        <h3 className="text-text-primary truncate font-serif text-sm">{title}</h3>
-      </div>
+    <header
+      className={cn(
+        'border-border-soft absolute left-0 right-0 top-0 z-20 flex items-center',
+        'justify-between gap-3 border-b px-4 py-2.5',
+        'bg-surface/85 backdrop-blur-md',
+      )}
+    >
+      <h3 className="text-text-primary min-w-0 truncate font-serif text-base font-medium">{title}</h3>
       <div className="flex items-center gap-2">
-        <StageDots stage={stage} />
-        {onClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close explainer"
-            className="text-text-tertiary hover:text-text-secondary inline-flex size-6 items-center justify-center rounded-full transition-colors"
-          >
-            <X className="size-3.5" />
-          </button>
-        )}
+        <MaterialsHeaderStack
+          attachments={attachments}
+          cuePulse={cuePulse}
+          onClick={onOpenMaterials}
+        />
+        <span aria-hidden className="bg-border-subtle h-5 w-px" />
+        <div className="flex items-center gap-1">
+          <HeaderLabeledButton label="Resources" onClick={onReferences}>
+            <BookOpen className="size-3.5" />
+          </HeaderLabeledButton>
+          <HeaderIconButton label="Share" onClick={() => {}}>
+            <Share2 className="size-3.5" />
+          </HeaderIconButton>
+          <HeaderIconButton label="Fullscreen" onClick={() => {}}>
+            <Expand className="size-3.5" />
+          </HeaderIconButton>
+          {onClose && (
+            <HeaderIconButton label="Close" onClick={onClose}>
+              <X className="size-3.5" />
+            </HeaderIconButton>
+          )}
+        </div>
       </div>
     </header>
   )
 }
 
-const STAGE_ORDER: ArtifactStage[] = [
-  'opening',
-  'predict-1',
-  'reveal-1',
-  'predict-2',
-  'reveal-2',
-  'closing',
-]
-
-function StageDots({ stage }: { stage: ArtifactStage }) {
-  const idx = STAGE_ORDER.indexOf(stage)
-  return (
-    <div className="flex items-center gap-1">
-      {STAGE_ORDER.map((s, i) => (
-        <span
-          key={s}
-          className={cn(
-            'size-1.5 rounded-full transition-colors',
-            i < idx && 'bg-text-tertiary/40',
-            i === idx && 'bg-accent-strong',
-            i > idx && 'bg-text-tertiary/15',
-          )}
-        />
-      ))}
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Bubble track
-// ---------------------------------------------------------------------------
-
 /**
- * The bubble track. Past bubbles are visible above the active one with
- * decreasing opacity. The active bubble is the click target for advance.
- *
- * When the active bubble has an unfulfilled gate (Beat 3: must click ≥2
- * panels first), the advance is blocked and a small hint surfaces.
+ * Stacked-paper thumbnail control in the artifact header. Three thumbnails
+ * max, fanned out with small rotations so the stack reads as "papers". The
+ * whole control opens the materials lightbox. Pulses when the bubble script
+ * broadcasts the 'panel-materials' cue (e.g. opening beat 1).
  */
-function BubbleTrack({
-  bubbles,
-  currentIndex,
-  interactive,
-  canRetreat,
-  gateBlocked,
-  stage,
-  panelsClicked,
-  onAdvance,
-  onRetreat,
+function MaterialsHeaderStack({
+  attachments,
+  cuePulse,
+  onClick,
 }: {
-  bubbles: Bubble[]
-  currentIndex: number
-  interactive: boolean
-  canRetreat: boolean
-  gateBlocked: boolean
-  stage: ArtifactStage
-  panelsClicked: number
-  onAdvance: () => void
-  onRetreat: () => void
+  attachments: ImageAttachment[]
+  cuePulse: boolean
+  onClick: () => void
 }) {
-  const activeBubble = bubbles[currentIndex] ?? null
-  const pastBubbles = bubbles.slice(Math.max(0, currentIndex - 2), currentIndex)
-  const isPredict = stage === 'predict-1' || stage === 'predict-2'
-
+  if (attachments.length === 0) return null
+  const visible = attachments.slice(0, 3)
   return (
-    <div className="flex flex-1 flex-col gap-2 px-3.5 py-3.5">
-      {/* Past bubbles, faded by distance from the active one */}
-      <div className="flex flex-col gap-1.5">
-        {pastBubbles.map((b, i) => {
-          const distance = pastBubbles.length - i
-          const opacity = distance === 1 ? 0.55 : 0.32
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Open your materials"
+      className={cn(
+        'group relative -my-1 inline-flex items-center gap-2 rounded-md px-1.5 py-1',
+        'hover:bg-state-hover transition-colors',
+      )}
+    >
+      <span
+        className="relative inline-flex h-7 shrink-0"
+        style={{ width: `${28 + (visible.length - 1) * 8}px` }}
+      >
+        {visible.map((a, idx) => {
+          // Fan the stack: leftmost tilts slightly left, rightmost slightly
+          // right. Each subsequent paper sits to the right of the prior so
+          // both edges are visible.
+          const center = (visible.length - 1) / 2
+          const rotation = (idx - center) * 7
+          const offset = idx * 8
           return (
-            <div
-              key={`past-${currentIndex}-${i}`}
-              className={cn(
-                'border-border-subtle bg-page',
-                'rounded-md border px-3 py-2 text-[12px] leading-snug',
-                'text-text-secondary font-text',
-              )}
-              style={{ opacity }}
-            >
-              {b.text}
-            </div>
+            <img
+              key={a.id}
+              src={`data:${a.mediaType};base64,${a.data}`}
+              alt=""
+              aria-hidden
+              className="border-border-soft bg-surface absolute inset-y-0 size-7 rounded-sm border object-cover shadow-sm"
+              style={{ left: `${offset}px`, transform: `rotate(${rotation}deg)`, zIndex: idx }}
+            />
           )
         })}
-      </div>
-
-      {/* Active bubble — click target for advance */}
-      {activeBubble && !isPredict && (
-        <button
-          type="button"
-          onClick={interactive && !gateBlocked ? onAdvance : undefined}
-          disabled={!interactive || gateBlocked}
-          className={cn(
-            'group text-left w-full',
-            'border-border-subtle bg-page',
-            'rounded-md border px-3.5 py-2.5 text-[13px] leading-snug',
-            'text-text-primary font-text shadow-sm',
-            'animate-[bubbleFadeIn_220ms_ease-out]',
-            interactive && !gateBlocked && 'cursor-pointer hover:border-accent/30 hover:shadow',
-            (!interactive || gateBlocked) && 'cursor-default',
-          )}
-          aria-label="Advance"
-        >
-          {activeBubble.text}
-        </button>
+      </span>
+      <span className="text-text-secondary group-hover:text-text-primary text-[12px] font-medium">
+        Attachments
+      </span>
+      {cuePulse && (
+        <span
+          aria-hidden
+          className="border-accent/40 bg-accent/8 pointer-events-none absolute -inset-0.5 -z-10 animate-[cuePulse_1600ms_ease-in-out_infinite] rounded-md border"
+        />
       )}
-
-      {isPredict && (
-        <div className="text-text-tertiary text-[11px] italic leading-snug">
-          {stage === 'predict-1' ? 'Pick the closest read →' : 'One more →'}
-        </div>
-      )}
-
-      {/* Gate hint */}
-      {gateBlocked && activeBubble?.gate === 'panels-explored' && (
-        <div
-          className={cn(
-            'border-accent/30 bg-accent/8 text-accent-strong',
-            'rounded-md border border-dashed px-3 py-1.5 text-[11px] leading-snug',
-          )}
-        >
-          Click {2 - panelsClicked} more panel{2 - panelsClicked === 1 ? '' : 's'} below
-          to continue.
-        </div>
-      )}
-
-      <div className="mt-auto flex items-center justify-between pt-2">
-        <button
-          type="button"
-          onClick={onRetreat}
-          disabled={!canRetreat || !interactive}
-          className={cn(
-            'text-text-tertiary hover:text-text-secondary inline-flex items-center gap-1 text-[11px]',
-            'transition-colors disabled:cursor-not-allowed disabled:opacity-30',
-          )}
-        >
-          <ChevronLeft className="size-3" />
-          Back
-        </button>
-        <span className="text-text-tertiary text-[11px] tabular-nums">
-          {isPredict ? '·' : `${currentIndex + 1} / ${Math.max(bubbles.length, 1)}`}
-        </span>
-        <button
-          type="button"
-          onClick={onAdvance}
-          disabled={!interactive || isPredict || gateBlocked || !activeBubble}
-          className={cn(
-            'text-text-secondary hover:text-text-primary inline-flex items-center gap-1 text-[11px]',
-            'transition-colors disabled:cursor-not-allowed disabled:opacity-30',
-          )}
-        >
-          Next
-          <ChevronRight className="size-3" />
-        </button>
-      </div>
-      <style>{`
-        @keyframes bubbleFadeIn {
-          from { opacity: 0; transform: translateY(4px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
-    </div>
+    </button>
   )
 }
 
-// ---------------------------------------------------------------------------
-// Annotation footnote — shown beneath the 3D scene when a panel is active
-// ---------------------------------------------------------------------------
-
-const PANEL_OMITS_PROSE: Record<string, { tellsYou: string; omits: string }> = {
-  lewis: {
-    tellsYou: 'Electron bookkeeping — bonded pairs and lone pairs.',
-    omits: '3D geometry. Bond angles. Where the lone pair sits in space.',
-  },
-  wedge: {
-    tellsYou: 'Bond directions: in plane (lines), toward you (wedge), behind (dash).',
-    omits: 'The shape of lone-pair electron density.',
-  },
-  geometry: {
-    tellsYou: 'Shape name. Bond angle. Electron-domain geometry.',
-    omits: 'The molecule itself — only the label.',
-  },
-}
-
-function AnnotationFootnote({ panelId }: { panelId: string }) {
-  const meta = PANEL_OMITS_PROSE[panelId]
-  if (!meta) return null
+function HeaderIconButton({
+  label,
+  onClick,
+  disabled,
+  tooltip,
+  children,
+}: {
+  label: string
+  onClick?: () => void
+  disabled?: boolean
+  tooltip?: string
+  children: React.ReactNode
+}) {
   return (
-    <div className="border-border-subtle bg-page/60 grid grid-cols-2 gap-2 rounded-md border px-3 py-2 text-[11px] leading-snug">
-      <div>
-        <div className="text-text-tertiary text-[9.5px] uppercase tracking-wide">Tells you</div>
-        <div className="text-text-secondary mt-0.5">{meta.tellsYou}</div>
+    <button
+      type="button"
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={tooltip ?? label}
+      className={cn(
+        'text-text-tertiary hover:text-text-secondary hover:bg-state-hover inline-flex size-7',
+        'items-center justify-center rounded-md transition-colors',
+        disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-text-tertiary',
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+function HeaderLabeledButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string
+  onClick?: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'text-text-secondary hover:text-text-primary hover:bg-state-hover inline-flex h-7',
+        'items-center gap-1.5 rounded-md px-2 text-[12px] font-medium transition-colors',
+      )}
+    >
+      {children}
+      <span>{label}</span>
+    </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Right pane — state machine (bubble / predict / reveal / closing) +
+// persistent stepper at bottom.
+// ---------------------------------------------------------------------------
+
+type RightPaneProps = {
+  artifact: ArtifactState
+  interactive: boolean
+  expandedPanel: LiteracyPanel | null
+  onExpandPanel: (panel: LiteracyPanel | null) => void
+  onAdvance: (opts?: { force?: boolean }) => void
+  onRetreat: () => void
+  onSubmitPrediction1: (input: { optionId?: Prediction1Key; freeText?: string }) => void
+  onSubmitPrediction2: (input: { optionId?: Prediction2Key; freeText?: string }) => void
+  onClose: () => void
+  onOpenSummary: () => void
+  onOpenReferences: () => void
+}
+
+function RightPane({
+  artifact,
+  interactive,
+  expandedPanel,
+  onExpandPanel,
+  onAdvance,
+  onRetreat,
+  onSubmitPrediction1,
+  onSubmitPrediction2,
+  onClose,
+  onOpenSummary,
+  onOpenReferences,
+}: RightPaneProps) {
+  const bubbles = bubblesForStage(artifact.stage, artifact.prediction1, artifact.prediction2)
+  const currentBubble = bubbles[artifact.bubbleIndex] ?? null
+  const isPredict = artifact.stage === 'predict-1' || artifact.stage === 'predict-2'
+  const isReveal = artifact.stage === 'reveal-1' || artifact.stage === 'reveal-2'
+  const isClosing = artifact.stage === 'closing'
+  const isRevealHead = isReveal && artifact.bubbleIndex === 0
+  const gate = gateProgress(currentBubble, artifact)
+  const gateSatisfied = !gate || gate.satisfied
+
+  // State key drives the in-pane fade transition.
+  const stateKey = `${artifact.stage}:${artifact.bubbleIndex}`
+
+  const position = isPredict
+    ? STAGE_OFFSET[artifact.stage] + 1
+    : positionInArc(artifact.stage, artifact.bubbleIndex)
+
+  const canRetreat = !(artifact.stage === 'opening' && artifact.bubbleIndex === 0)
+
+  // Track navigation direction so the right-pane state content slides in
+  // from the right when the user advances and from the left when they go
+  // back. Falls through to 'forward' for the very first render.
+  const prevPositionRef = useRef(position)
+  const direction: 'forward' | 'back' =
+    position < prevPositionRef.current ? 'back' : 'forward'
+  useEffect(() => {
+    prevPositionRef.current = position
+  }, [position])
+
+  return (
+    <div className="relative h-full">
+      {/* State content. Each step is its own motion.div absolutely positioned
+          inside this relative wrapper so the outgoing and incoming steps can
+          overlap during the transition. The inner scroll container handles
+          vertical overflow when a step's content is taller than the pane,
+          and carries extra bottom padding so content fades behind the
+          gradient footer rather than colliding with it. */}
+      <div className="relative h-full overflow-hidden">
+        <AnimatePresence initial={false} custom={direction} mode="popLayout">
+          <motion.div
+            key={stateKey}
+            custom={direction}
+            variants={stepSlideVariants}
+            initial="enter"
+            animate="center"
+            exit="exit"
+            transition={{
+              x: { type: 'spring', stiffness: 320, damping: 34, mass: 0.7 },
+              opacity: { duration: 0.18, ease: 'easeOut' },
+            }}
+            className="no-scrollbar absolute inset-0 overflow-y-auto"
+          >
+            <div className="flex min-h-full flex-col justify-center px-4 pb-24 pt-5">
+              <StateContent
+                artifact={artifact}
+                currentBubble={currentBubble}
+                isPredict={isPredict}
+                isRevealHead={isRevealHead}
+                isClosing={isClosing}
+                interactive={interactive}
+                expandedPanel={expandedPanel}
+                onExpandPanel={onExpandPanel}
+                onSubmitPrediction1={onSubmitPrediction1}
+                onSubmitPrediction2={onSubmitPrediction2}
+                onClose={onClose}
+                onOpenSummary={onOpenSummary}
+                onOpenReferences={onOpenReferences}
+              />
+            </div>
+          </motion.div>
+        </AnimatePresence>
       </div>
-      <div>
-        <div className="text-text-tertiary text-[9.5px] uppercase tracking-wide">Omits</div>
-        <div className="text-text-secondary mt-0.5">{meta.omits}</div>
+
+      {/* Footer overlay. A bottom-anchored linear gradient (solid surface at
+          the bottom, transparent at the top) lets the scrolling content fade
+          out behind the gate/stepper instead of hitting a hard divider. */}
+      <div
+        aria-hidden
+        className="from-surface pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-50% to-transparent"
+      />
+      <div className="absolute inset-x-0 bottom-0">
+        {gate && !gate.satisfied && (
+          <div className="text-text-tertiary px-4 py-2 text-[11px]">
+            <GateIndicator
+              label={gate.label}
+              onSkip={interactive ? () => onAdvance({ force: true }) : undefined}
+            />
+          </div>
+        )}
+        <Stepper
+          canRetreat={canRetreat && interactive}
+          canAdvance={interactive && !isPredict && !!currentBubble && gateSatisfied}
+          position={position}
+          total={TOTAL_BEATS}
+          onRetreat={onRetreat}
+          onAdvance={onAdvance}
+        />
       </div>
     </div>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Predict panel — the right-column prediction interface
+// State content — bubble / predict / reveal / closing
 // ---------------------------------------------------------------------------
 
-function PredictPanel({
+function StateContent({
+  artifact,
+  currentBubble,
+  isPredict,
+  isRevealHead,
+  isClosing,
+  interactive,
+  expandedPanel,
+  onExpandPanel,
+  onSubmitPrediction1,
+  onSubmitPrediction2,
+  onClose,
+  onOpenSummary,
+  onOpenReferences,
+}: {
+  artifact: ArtifactState
+  currentBubble: Bubble | null
+  isPredict: boolean
+  isRevealHead: boolean
+  isClosing: boolean
+  interactive: boolean
+  expandedPanel: LiteracyPanel | null
+  onExpandPanel: (panel: LiteracyPanel | null) => void
+  onSubmitPrediction1: (input: { optionId?: Prediction1Key; freeText?: string }) => void
+  onSubmitPrediction2: (input: { optionId?: Prediction2Key; freeText?: string }) => void
+  onClose: () => void
+  onOpenSummary: () => void
+  onOpenReferences: () => void
+}) {
+  if (isPredict) {
+    return (
+      <div className="flex h-full flex-col gap-4">
+        {artifact.stage === 'predict-1' && (
+          <PredictPanel<Prediction1Key>
+            label="Your read"
+            framing={PREDICTION_1.framing}
+            options={PREDICTION_1.options}
+            onSubmit={interactive ? onSubmitPrediction1 : () => {}}
+            disabled={!interactive}
+          />
+        )}
+        {artifact.stage === 'predict-2' && (
+          <PredictPanel<Prediction2Key>
+            label="One more"
+            framing={PREDICTION_2.framing}
+            options={PREDICTION_2.options}
+            onSubmit={interactive ? onSubmitPrediction2 : () => {}}
+            disabled={!interactive}
+          />
+        )}
+      </div>
+    )
+  }
+
+  if (isClosing) {
+    return (
+      <div className="flex flex-col gap-4">
+        {currentBubble && <BubbleCard text={currentBubble.text} />}
+        <button
+          type="button"
+          onClick={onOpenSummary}
+          className={cn(
+            'border-accent/30 bg-accent/5 hover:bg-accent/10 hover:border-accent/40',
+            'text-accent-strong rounded-md border px-3 py-2 text-left text-[12px] font-medium',
+            'transition-colors',
+          )}
+        >
+          View takeaway card →
+        </button>
+        <button
+          type="button"
+          onClick={onOpenReferences}
+          className={cn(
+            'border-border-subtle bg-page hover:bg-state-hover',
+            'text-text-secondary rounded-md border px-3 py-2 text-left text-[12px]',
+            'transition-colors',
+          )}
+        >
+          Go deeper — external resources →
+        </button>
+        {interactive && (
+          <button
+            type="button"
+            onClick={onClose}
+            className={cn(
+              'border-accent/40 bg-accent/10 hover:bg-accent/15',
+              'text-accent-strong rounded-md border px-3 py-2 text-[12px] font-medium',
+              'mt-1 transition-colors',
+            )}
+          >
+            Done — back to the conversation
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  // Bubble state (opening / mid-reveal) — render the bubble, with a
+  // "You said" attribution chip when we're entering a reveal sequence. If a
+  // literacy panel (Lewis / Wedge / Geometry) is active, surface its 2D
+  // diagram inline above the bubble: the 3D viewport shows the matching
+  // treatment, and the right pane shows the literal 2D representation.
+  const literacyPanel =
+    artifact.activePanel === 'lewis' ||
+    artifact.activePanel === 'wedge' ||
+    artifact.activePanel === 'geometry'
+      ? artifact.activePanel
+      : null
+
+  return (
+    <div className="flex flex-col gap-3">
+      {isRevealHead && (
+        <RevealAttribution
+          prediction1={artifact.prediction1}
+          prediction2={artifact.prediction2}
+          stage={artifact.stage}
+        />
+      )}
+      <AnimatePresence mode="wait" initial={false}>
+        {literacyPanel && (
+          <PanelDiagramInline
+            key={literacyPanel}
+            panel={literacyPanel}
+            molecule={artifact.activeMolecule}
+            isExpanded={expandedPanel === literacyPanel}
+            onExpand={() => onExpandPanel(literacyPanel)}
+          />
+        )}
+      </AnimatePresence>
+      {currentBubble && <BubbleCard text={currentBubble.text} />}
+    </div>
+  )
+}
+
+function PanelDiagramInline({
+  panel,
+  molecule,
+  isExpanded,
+  onExpand,
+}: {
+  panel: LiteracyPanel
+  molecule: ArtifactState['activeMolecule']
+  isExpanded: boolean
+  onExpand: () => void
+}) {
+  const label =
+    panel === 'lewis' ? 'Lewis structure' : panel === 'wedge' ? 'Wedge-and-dash' : 'Geometry chart'
+  // The thumbnail stays in flow at all times (so the bubble underneath
+  // doesn't shift when the user expands). Its `layoutId` is shared with the
+  // expanded clone overlay rendered up at the aside level — motion uses that
+  // to spring the clone from this thumbnail's bounding box on enter, and
+  // back to it on exit. We hide the thumbnail visually while expanded so it
+  // doesn't draw on top of the animating clone, but it still occupies space.
+  return (
+    <motion.figure
+      layoutId={`panel-diagram-${panel}`}
+      initial={{ opacity: 0, scale: 0.96 }}
+      animate={{ opacity: isExpanded ? 0 : 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.96 }}
+      transition={{
+        layout: { type: 'spring', stiffness: 280, damping: 32, mass: 0.7 },
+        default: { duration: 0.2, ease: 'easeOut' },
+      }}
+      className="group/figure relative flex w-fit flex-col items-center gap-1.5 self-center"
+      aria-label={label}
+    >
+      <button
+        type="button"
+        onClick={onExpand}
+        aria-label="Expand diagram"
+        className={cn(
+          'text-text-tertiary hover:text-text-secondary hover:bg-state-hover',
+          'absolute -right-2 -top-2 inline-flex size-6 items-center justify-center rounded-md',
+          'opacity-0 transition-opacity group-hover/figure:opacity-100 focus:opacity-100',
+        )}
+      >
+        <Maximize2 className="size-3.5" />
+      </button>
+      <PanelDiagram panel={panel} molecule={molecule} />
+      <figcaption className="text-text-tertiary font-serif text-[12px] italic">
+        {label}
+      </figcaption>
+    </motion.figure>
+  )
+}
+
+function BubbleCard({ text }: { text: string }) {
+  return (
+    <p className="text-text-primary font-serif text-[17px] leading-relaxed">{text}</p>
+  )
+}
+
+function RevealAttribution({
+  prediction1,
+  prediction2,
+  stage,
+}: {
+  prediction1: ArtifactPrediction1 | null
+  prediction2: ArtifactPrediction2 | null
+  stage: ArtifactStage
+}) {
+  const text =
+    stage === 'reveal-1'
+      ? lookupLabel1(prediction1) ?? prediction1?.freeText ?? ''
+      : lookupLabel2(prediction2) ?? prediction2?.freeText ?? ''
+  if (!text) return null
+  return (
+    <p className="text-text-tertiary font-serif text-[15px] italic leading-relaxed">
+      “{text}”
+    </p>
+  )
+}
+
+function lookupLabel1(p: ArtifactPrediction1 | null): string | undefined {
+  if (!p?.optionId) return undefined
+  return PREDICTION_1.options.find((o) => o.id === p.optionId)?.label
+}
+function lookupLabel2(p: ArtifactPrediction2 | null): string | undefined {
+  if (!p?.optionId) return undefined
+  return PREDICTION_2.options.find((o) => o.id === p.optionId)?.label
+}
+
+// ---------------------------------------------------------------------------
+// Predict panel — full right-pane state with question + options + free-text
+// ---------------------------------------------------------------------------
+
+function PredictPanel<K extends string>({
   label,
   framing,
   options,
   onSubmit,
+  disabled,
 }: {
   label: string
   framing: string
-  options: PredictionOption[]
-  onSubmit: (input: { optionId?: string; freeText?: string }) => void
+  options: PredictionOption<K>[]
+  onSubmit: (input: { optionId?: K; freeText?: string }) => void
+  disabled: boolean
 }) {
   const [freeText, setFreeText] = useState('')
 
@@ -417,26 +845,29 @@ function PredictPanel({
   }
 
   return (
-    <div className="flex flex-col gap-2.5">
-      <div className="text-text-tertiary text-[10px] uppercase tracking-wide">{label}</div>
-      <p className="text-text-secondary text-[13px] leading-snug">{framing}</p>
+    <div className="flex flex-col gap-3">
+      <div className="text-text-tertiary text-[10px] font-medium uppercase tracking-wide">
+        {label}
+      </div>
+      <p className="text-text-primary text-[15px] leading-relaxed">{framing}</p>
 
-      <div className="mt-1 flex flex-col gap-1.5">
+      <div className="mt-1 flex flex-col gap-2">
         {options.map((opt, idx) => (
           <button
             key={opt.id}
             type="button"
+            disabled={disabled}
             onClick={() => onSubmit({ optionId: opt.id })}
             className={cn(
               'border-border-subtle hover:bg-state-hover hover:border-accent/40',
-              'text-text-primary font-text rounded-md border bg-transparent',
-              'flex items-start gap-2 px-2.5 py-2 text-left text-[12px] leading-snug',
-              'cursor-pointer transition-colors',
+              'text-text-primary font-text rounded-md border bg-surface',
+              'flex items-start gap-2.5 px-3 py-2.5 text-left text-[13px] leading-snug',
+              'cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-50',
             )}
           >
             <span
               className={cn(
-                'bg-state-pill text-text-secondary inline-flex h-5 w-5 shrink-0',
+                'bg-state-pill text-text-secondary mt-0.5 inline-flex h-5 w-5 shrink-0',
                 'items-center justify-center rounded-full text-[10px] font-medium',
               )}
             >
@@ -445,8 +876,15 @@ function PredictPanel({
             <span className="flex-1">{opt.label}</span>
           </button>
         ))}
+      </div>
+
+      <div className="mt-1 flex flex-col gap-1">
+        <span className="text-text-tertiary text-[10px] uppercase tracking-wide">
+          Or in your own words
+        </span>
         <textarea
           value={freeText}
+          disabled={disabled}
           onChange={(e) => setFreeText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -454,12 +892,13 @@ function PredictPanel({
               submitFreeText()
             }
           }}
-          rows={1}
-          placeholder="or in your own words…"
+          rows={2}
+          placeholder="Type a sentence and press Enter…"
           className={cn(
             'font-text text-text-primary placeholder:text-text-tertiary',
-            'border-border-subtle focus:border-accent/40 rounded-md border bg-transparent',
+            'border-border-subtle focus:border-accent/40 rounded-md border bg-surface',
             'resize-none px-2.5 py-2 text-[12px] leading-snug outline-none',
+            'disabled:cursor-not-allowed disabled:opacity-50',
           )}
         />
       </div>
@@ -468,26 +907,126 @@ function PredictPanel({
 }
 
 // ---------------------------------------------------------------------------
-// Resources panel — closing surface
+// Stepper + gate indicator
 // ---------------------------------------------------------------------------
 
-function ResourcesPanel({
-  showCloseCta,
-  onClose,
+function Stepper({
+  canRetreat,
+  canAdvance,
+  position,
+  total,
+  onRetreat,
+  onAdvance,
 }: {
-  showCloseCta: boolean
-  onClose: () => void
+  canRetreat: boolean
+  canAdvance: boolean
+  position: number
+  total: number
+  onRetreat: () => void
+  onAdvance: (opts?: { force?: boolean }) => void
 }) {
   return (
-    <div className="flex flex-col gap-3">
-      <div>
-        <div className="text-text-tertiary text-[10px] uppercase tracking-wide">Go deeper</div>
-        <p className="text-text-tertiary mt-1 text-[11px] leading-snug">
-          A 3D viewer to play with, and the canonical primer.
-        </p>
-      </div>
+    <div className="flex items-center justify-between px-4 py-3">
+      <button
+        type="button"
+        onClick={onRetreat}
+        disabled={!canRetreat}
+        className={cn(
+          'text-text-tertiary hover:text-text-secondary inline-flex items-center gap-1 text-[12px]',
+          'transition-colors disabled:cursor-not-allowed disabled:opacity-30',
+        )}
+      >
+        <ChevronLeft className="size-3.5" />
+        Back
+      </button>
+      <span className="text-text-tertiary text-[11px] tabular-nums">
+        {position} / {total}
+      </span>
+      <button
+        type="button"
+        onClick={() => onAdvance()}
+        disabled={!canAdvance}
+        className={cn(
+          'text-text-secondary hover:text-text-primary inline-flex items-center gap-1 text-[12px]',
+          'transition-colors disabled:cursor-not-allowed disabled:opacity-30',
+        )}
+      >
+        Next
+        <ChevronRight className="size-3.5" />
+      </button>
+    </div>
+  )
+}
 
-      <ul className="flex flex-col gap-1.5">
+function GateIndicator({
+  label,
+  onSkip,
+}: {
+  label: string
+  onSkip?: () => void
+}) {
+  const [showSkip, setShowSkip] = useState(false)
+  useEffect(() => {
+    setShowSkip(false)
+    const id = window.setTimeout(() => setShowSkip(true), 10_000)
+    return () => window.clearTimeout(id)
+  }, [label])
+
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-accent-strong/85 inline-flex items-center gap-1.5">
+        <span aria-hidden className="bg-accent-strong/70 inline-block size-1.5 rounded-full" />
+        {label}
+      </span>
+      {showSkip && onSkip && (
+        <button
+          type="button"
+          onClick={onSkip}
+          className="text-text-tertiary hover:text-text-secondary underline-offset-2 hover:underline"
+        >
+          Skip this and keep going
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Viewport cue — invites the user to interact with the 3D scene when the
+// active bubble's cue is 'viewport'. Disappears as soon as the user starts
+// rotating (rotationRad > 0).
+// ---------------------------------------------------------------------------
+
+function ViewportCue({ artifact }: { artifact: ArtifactState }) {
+  const cue = activeCue(artifact)
+  if (cue !== 'viewport') return null
+  if (artifact.rotationRad > 0.05) return null
+  return (
+    <div
+      aria-hidden
+      className={cn(
+        'border-accent/35 bg-accent/8 text-accent-strong',
+        'pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2',
+        'animate-[artifactStateIn_300ms_ease-out] rounded-full border border-dashed px-3 py-1',
+        'text-center text-[11px] backdrop-blur-sm',
+      )}
+    >
+      Drag to rotate
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Overlays — References and Summary, openable from the header at any time
+// ---------------------------------------------------------------------------
+
+function ReferencesOverlay({ onClose }: { onClose: () => void }) {
+  return (
+    <OverlayShell title="References" onClose={onClose}>
+      <p className="text-text-tertiary text-[12px] leading-snug">
+        Rotate any molecule yourself, or read the primer.
+      </p>
+      <ul className="mt-3 flex flex-col gap-2">
         {RESOURCES.map((r) => (
           <li key={r.url}>
             <a
@@ -496,89 +1035,85 @@ function ResourcesPanel({
               rel="noreferrer noopener"
               className={cn(
                 'border-border-subtle hover:bg-state-hover hover:border-accent/30',
-                'group flex items-start justify-between gap-2 rounded-md border bg-transparent px-2.5 py-2',
+                'group flex items-start justify-between gap-2 rounded-md border bg-surface px-3 py-2.5',
                 'transition-colors',
               )}
             >
               <div className="min-w-0">
-                <div className="text-text-primary truncate text-[12px] font-medium">
+                <div className="text-text-primary truncate text-[13px] font-medium">
                   {r.title}
                 </div>
-                <div className="text-text-tertiary text-[10px]">{r.source}</div>
+                <div className="text-text-tertiary text-[11px]">{r.source}</div>
               </div>
-              <ExternalLink className="text-text-tertiary group-hover:text-text-secondary mt-0.5 size-3 shrink-0" />
+              <ExternalLink className="text-text-tertiary group-hover:text-text-secondary mt-0.5 size-3.5 shrink-0" />
             </a>
           </li>
         ))}
       </ul>
-
-      {showCloseCta && (
-        <button
-          type="button"
-          onClick={onClose}
-          className={cn(
-            'border-accent/40 bg-accent/10 hover:bg-accent/15',
-            'text-accent-strong rounded-md border px-3 py-2 text-[12px] font-medium',
-            'mt-1 transition-colors',
-          )}
-        >
-          Done — back to the conversation
-        </button>
-      )}
-    </div>
+    </OverlayShell>
   )
 }
 
-// ---------------------------------------------------------------------------
-// Context strip — what user picked, shown while in reveal-1 / reveal-2
-// ---------------------------------------------------------------------------
-
-function ContextStrip({
-  prediction1,
-  prediction2,
-}: {
-  prediction1: ArtifactPrediction | null
-  prediction2: ArtifactPrediction | null
-}) {
+function SummaryOverlay({ onClose }: { onClose: () => void }) {
   return (
-    <div className="flex flex-col gap-3">
-      {prediction1 && (
-        <PredictionEcho label="You said" prediction={prediction1} optionsHint={PREDICTION_1.options} />
-      )}
-      {prediction2 && (
-        <PredictionEcho
-          label="And"
-          prediction={prediction2}
-          optionsHint={followUpFor(prediction1).options}
-        />
-      )}
-      {!prediction1 && (
-        <p className="text-text-tertiary text-[11px] italic leading-snug">
-          Click the bubble to follow along.
-        </p>
-      )}
-    </div>
+    <OverlayShell title="Takeaway" onClose={onClose}>
+      <div className="border-accent/30 bg-accent/5 flex flex-col gap-2 rounded-md border p-3.5">
+        <div className="text-accent-strong text-[10px] font-medium uppercase tracking-wide">
+          {SUMMARY_CARD.title}
+        </div>
+        <ul className="flex flex-col gap-2">
+          {SUMMARY_CARD.lines.map((line, i) => (
+            <li
+              key={i}
+              className="text-text-secondary flex items-start gap-2 text-[13px] leading-snug"
+            >
+              <span className="bg-accent-strong/70 mt-1.5 inline-block size-1 shrink-0 rounded-full" />
+              <span>{line}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </OverlayShell>
   )
 }
 
-function PredictionEcho({
-  label,
-  prediction,
-  optionsHint,
+function OverlayShell({
+  title,
+  onClose,
+  children,
 }: {
-  label: string
-  prediction: ArtifactPrediction
-  optionsHint: PredictionOption[]
+  title: string
+  onClose: () => void
+  children: React.ReactNode
 }) {
-  const text = prediction.optionId
-    ? (optionsHint.find((o) => o.id === prediction.optionId)?.label ?? '')
-    : (prediction.freeText ?? '')
+  const dialogRef = useRef<HTMLDivElement | null>(null)
   return (
-    <div className="flex flex-col gap-1">
-      <span className="text-text-tertiary text-[10px] uppercase tracking-wide">{label}</span>
-      <span className="border-border-subtle bg-page/60 text-text-secondary rounded-md border px-2.5 py-1.5 text-[11px] leading-snug">
-        “{text}”
-      </span>
+    <div
+      className="absolute inset-0 z-30 flex items-start justify-center bg-black/30 p-6 backdrop-blur-[2px] animate-[artifactStateIn_220ms_ease-out]"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+      role="dialog"
+      aria-label={title}
+    >
+      <div
+        ref={dialogRef}
+        className="bg-surface border-border-subtle relative w-full max-w-md rounded-lg border p-4 shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h4 className="text-text-primary font-serif text-sm">{title}</h4>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="text-text-tertiary hover:bg-state-hover hover:text-text-secondary inline-flex size-7 items-center justify-center rounded-md transition-colors"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+        {children}
+      </div>
     </div>
   )
 }

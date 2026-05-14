@@ -12,6 +12,7 @@ import {
 } from '@/components/chat'
 import { useChatStore } from '@/lib/chat-store'
 import { usePrototypeStore } from '@/lib/prototype-store'
+import { cn } from '@/lib/utils'
 
 export default function ChatView({ params }: { params: Promise<{ chatId: string }> }) {
   const { chatId } = use(params)
@@ -60,26 +61,34 @@ export default function ChatView({ params }: { params: Promise<{ chatId: string 
         <ChatHeader title={chat.title} />
 
         <div ref={scrollRef} className="scroll-area flex-1 overflow-auto pt-6">
-          <div className="mx-auto max-w-[var(--content-max-width)] px-6 pb-6">
+          <div className="mx-auto w-full max-w-[1024px] px-6 pb-6">
             {chat.messages.map((m) => {
-              if (m.role === 'user') return <UserMessage key={m.id} text={m.text} />
+              if (m.role === 'user')
+                return (
+                  <MessageRow key={m.id}>
+                    <UserMessage text={m.text} attachments={m.attachments} />
+                  </MessageRow>
+                )
               const isArtifact = m.id === artifactMessageId
               return (
-                <ClaudeMessage
-                  key={m.id}
-                  id={`message-${m.id}`}
-                  className={isArtifact ? '!px-0' : undefined}
-                >
-                  <AssistantBody text={m.text} />
-                </ClaudeMessage>
+                <MessageRow key={m.id} wide={isArtifact}>
+                  <ClaudeMessage
+                    id={`message-${m.id}`}
+                    className={isArtifact ? '!px-0' : undefined}
+                  >
+                    <AssistantBody text={m.text} />
+                  </ClaudeMessage>
+                </MessageRow>
               )
             })}
 
             {showInFlight && (
-              <ClaudeMessage>
-                <AssistantBody text={streamBuffer} isStreaming />
-                {!streamBuffer && <SparkIndicator working={thinking} />}
-              </ClaudeMessage>
+              <MessageRow>
+                <ClaudeMessage>
+                  <AssistantBody text={streamBuffer} isStreaming />
+                  {!streamBuffer && <SparkIndicator working={thinking} />}
+                </ClaudeMessage>
+              </MessageRow>
             )}
           </div>
         </div>
@@ -92,7 +101,7 @@ export default function ChatView({ params }: { params: Promise<{ chatId: string 
               model={model}
               onModelChange={setModel}
               isStreaming={isStreaming}
-              onSend={(text) => sendReply(chatId, text)}
+              onSend={(text, attachments) => sendReply(chatId, text, attachments)}
               onStop={stopStream}
             />
           </div>
@@ -102,6 +111,30 @@ export default function ChatView({ params }: { params: Promise<{ chatId: string 
           Claude can make mistakes. Please double-check responses.
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Wraps a single message row. Normal messages stay capped at the standard
+ * chat content width; artifact messages are allowed to expand to ~1024px so
+ * the inline 3D explainer has more room to breathe.
+ */
+function MessageRow({
+  wide = false,
+  children,
+}: {
+  wide?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <div
+      className={cn(
+        'mx-auto w-full',
+        wide ? 'max-w-[1024px]' : 'max-w-[var(--content-max-width)]',
+      )}
+    >
+      {children}
     </div>
   )
 }

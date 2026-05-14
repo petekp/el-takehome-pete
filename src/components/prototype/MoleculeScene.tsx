@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { cn } from '@/lib/utils'
@@ -10,28 +10,39 @@ import type { ChipState, RepresentationPanelId } from '@/lib/prototype-store'
 /**
  * The 3D molecule viewport — the centerpiece of the artifact.
  *
- * Renders a single molecule (methane, ammonia, ammonium, or water) with
- * sphere atoms + cylinder bonds, plus optional lone-pair density clouds,
- * orbital lobes, and bond-angle annotations driven by `chipState`.
+ * Renders XeF2 (or its axial-strain variant) and ClF3 with sphere atoms +
+ * cylinder bonds, plus optional lone-pair density clouds, an equatorial-
+ * plane disc, and bond-angle annotations driven by `chipState`.
  *
- * Design constraints (from the spec):
- *   - Bret Victor aesthetic: matte materials, soft lighting, off-white
- *     background, no gloss, no marketing-render polish.
+ * v4 polish: each representation panel triggers a dramatic visual treatment.
+ *   lewis     — camera snaps to a head-on view, FOV collapses toward
+ *               orthographic, scene desaturates, depth cues disappear. The
+ *               molecule "flattens" into a 2D diagram.
+ *   wedge     — camera holds a canonical perspective view, bonds re-render
+ *               with wedge/dash visual vocabulary based on their angle to
+ *               the camera. Lone pairs, equatorial plane, and angle labels
+ *               are hidden.
+ *   geometry  — camera holds a clean view, equatorial disc and bond-angle
+ *               annotation are forced on, a floating shape-name label
+ *               appears, atom colors desaturate to foreground the abstract
+ *               structure. Lone pairs are hidden.
+ *   default   — free orbit, all features available, no overlays.
+ *
+ * Other constraints:
+ *   - Bret Victor aesthetic: matte materials, soft lighting, off-white bg.
  *   - Auto-rotates slowly on load to signal "this is 3D, drag me."
- *   - First user interaction stops auto-rotation permanently.
- *   - OrbitControls with damped easing.
+ *   - OrbitControls 'change' events feed a rotation accumulator the parent
+ *     uses to satisfy the rotation gate at >=90 degrees.
+ *   - Camera rotation is disabled while a treatment is active so the panel
+ *     visuals stay legible.
  *   - Reset-view affordance in the corner.
- *
- * Molecule transitions (methane → ammonia → water, NH3 ↔ NH4⁺) are handled
- * by task 7 in a follow-up pass. For task 4 the component renders the
- * passed-in molecule as a static structure (with auto-rotation).
  */
 
 // ---------------------------------------------------------------------------
-// Molecule data — atom positions, bonds, lone pairs.
+// Molecule data — atom positions, bonds, lone pairs, equatorial plane.
 // ---------------------------------------------------------------------------
 
-type ElementSymbol = 'C' | 'N' | 'O' | 'H'
+type ElementSymbol = 'Xe' | 'F' | 'Cl'
 
 type AtomDef = {
   element: ElementSymbol
@@ -39,14 +50,14 @@ type AtomDef = {
 }
 
 type BondDef = {
-  from: number // atom index
+  from: number
   to: number
 }
 
 type LonePairDef = {
   /** Position of the lone-pair cloud center relative to the central atom. */
   position: [number, number, number]
-  /** Direction the cloud orients along (also the orbital lobe direction). */
+  /** Direction the cloud orients along. */
   direction: [number, number, number]
 }
 
@@ -54,108 +65,80 @@ type MoleculeData = {
   atoms: AtomDef[]
   bonds: BondDef[]
   lonePairs: LonePairDef[]
-  /** H–X–H bond angle in degrees (for annotation labels). */
-  bondAngle: number
+  /** Pair of atom indices defining the bond-angle annotation (typically the
+   *  two axial F's for XeF2 → 180° label). */
+  bondAnglePair?: [number, number]
+  /** Angle in degrees displayed on the annotation. */
+  bondAngle?: number
+  /** Whether the equatorial plane disc should render when the chip is on. */
+  hasEquatorialPlane: boolean
+  /** Shape name shown when in geometry treatment. */
+  shapeName: string
 }
 
-/**
- * For 3 H atoms symmetric around the +y axis (in the lower hemisphere),
- * compute the polar angle α (from +y) that produces the given H–X–H angle.
- *
- * Derivation:
- *   cos(θ_HH) = sin²(α)·cos(120°) + cos²(α) = 1.5·cos²(α) − 0.5
- *   → cos(α) = ±√((cos(θ) + 0.5) / 1.5)
- *
- * We take the negative root so α > 90° (H atoms below equator).
- */
-function alphaForTrigonalH(angleDeg: number): number {
+const BOND_LEN = 1.2
+const LONE_PAIR_RADIAL = 0.85
+const EQUATORIAL_PLANE_RADIUS = 1.35
+
+const AXIAL_UP: [number, number, number] = [0, BOND_LEN, 0]
+const AXIAL_DOWN: [number, number, number] = [0, -BOND_LEN, 0]
+
+function equatorialPos(angleDeg: number, r: number): [number, number, number] {
   const θ = (angleDeg * Math.PI) / 180
-  const cosA2 = (Math.cos(θ) + 0.5) / 1.5
-  return Math.acos(-Math.sqrt(cosA2))
+  return [Math.cos(θ) * r, 0, Math.sin(θ) * r]
 }
 
-const ATOM_RADIUS: Record<ElementSymbol, number> = {
-  C: 0.32,
-  N: 0.32,
-  O: 0.34,
-  H: 0.2,
-}
-
-// Muted CPK palette. Standard CPK is too saturated for an educational illo.
-const ATOM_COLOR: Record<ElementSymbol, number> = {
-  C: 0x555555,
-  N: 0x4a6fa5,
-  O: 0xc1574a,
-  H: 0xeaeaea,
-}
-
-const BOND_RADIUS = 0.06
-const BOND_COLOR = 0x9a958e
-
-// Secondary primitives — pushed up in contrast so they hold their own against
-// the solid atoms/bonds. Atoms and bonds are the load-bearing visuals; lone
-// pairs / orbital lobes / bond-angle annotations are the conceptual overlay
-// and need to read at a glance, not whisper.
-const LONE_PAIR_COLOR = 0x6b46c1 // deeper violet — readable as electron density
-const LONE_PAIR_OPACITY = 0.62
-const ORBITAL_LOBE_COLOR = 0x8b6dd5 // saturated lavender, distinct from lone pair
-const ORBITAL_LOBE_OPACITY = 0.46
-const ANGLE_ARC_COLOR = 0x5a544c
-const ANGLE_ARC_OPACITY = 0.85
-
-/**
- * Build a methane-shaped (tetrahedral, 4 H) molecule with one H placed at
- * +y. Used for both methane (central=C) and ammonium (central=N).
- */
-function tetrahedralFourH(central: ElementSymbol): MoleculeData {
-  // Standard tetrahedral basis with one apex at +y.
-  // Lower three H atoms at α = 109.47° from +y, evenly spaced.
-  const α = (109.4712 * Math.PI) / 180
-  const cosα = Math.cos(α)
-  const sinα = Math.sin(α)
-  const lower: [number, number, number][] = []
-  for (let i = 0; i < 3; i++) {
-    const φ = (i * 2 * Math.PI) / 3
-    lower.push([sinα * Math.cos(φ), cosα, sinα * Math.sin(φ)])
-  }
+function xef2(): MoleculeData {
   return {
     atoms: [
-      { element: central, position: [0, 0, 0] },
-      { element: 'H', position: [0, 1, 0] },
-      { element: 'H', position: lower[0] },
-      { element: 'H', position: lower[1] },
-      { element: 'H', position: lower[2] },
+      { element: 'Xe', position: [0, 0, 0] },
+      { element: 'F', position: AXIAL_UP },
+      { element: 'F', position: AXIAL_DOWN },
     ],
     bonds: [
       { from: 0, to: 1 },
       { from: 0, to: 2 },
-      { from: 0, to: 3 },
-      { from: 0, to: 4 },
     ],
-    lonePairs: [],
-    bondAngle: 109.5,
+    lonePairs: [
+      { position: equatorialPos(0, LONE_PAIR_RADIAL), direction: equatorialPos(0, 1) },
+      { position: equatorialPos(120, LONE_PAIR_RADIAL), direction: equatorialPos(120, 1) },
+      { position: equatorialPos(240, LONE_PAIR_RADIAL), direction: equatorialPos(240, 1) },
+    ],
+    bondAnglePair: [1, 2],
+    bondAngle: 180,
+    hasEquatorialPlane: true,
+    shapeName: 'Linear',
   }
 }
 
-/**
- * Build a trigonal pyramidal (3 H + 1 lone pair) molecule with the lone
- * pair pointing +y and the 3 H atoms in the lower hemisphere.
- */
-function trigonalPyramidal(central: ElementSymbol, hAngleDeg: number): MoleculeData {
-  const α = alphaForTrigonalH(hAngleDeg)
-  const cosα = Math.cos(α)
-  const sinα = Math.sin(α)
-  const lower: [number, number, number][] = []
-  for (let i = 0; i < 3; i++) {
-    const φ = (i * 2 * Math.PI) / 3
-    lower.push([sinα * Math.cos(φ), cosα, sinα * Math.sin(φ)])
-  }
+function xef2AxialStrain(): MoleculeData {
   return {
     atoms: [
-      { element: central, position: [0, 0, 0] },
-      { element: 'H', position: lower[0] },
-      { element: 'H', position: lower[1] },
-      { element: 'H', position: lower[2] },
+      { element: 'Xe', position: [0, 0, 0] },
+      { element: 'F', position: AXIAL_DOWN },
+      { element: 'F', position: equatorialPos(0, BOND_LEN) },
+    ],
+    bonds: [
+      { from: 0, to: 1 },
+      { from: 0, to: 2 },
+    ],
+    lonePairs: [
+      { position: [0, LONE_PAIR_RADIAL, 0], direction: [0, 1, 0] },
+      { position: equatorialPos(120, LONE_PAIR_RADIAL), direction: equatorialPos(120, 1) },
+      { position: equatorialPos(240, LONE_PAIR_RADIAL), direction: equatorialPos(240, 1) },
+    ],
+    hasEquatorialPlane: true,
+    shapeName: 'Strained',
+  }
+}
+
+function clf3(): MoleculeData {
+  return {
+    atoms: [
+      { element: 'Cl', position: [0, 0, 0] },
+      { element: 'F', position: AXIAL_UP },
+      { element: 'F', position: AXIAL_DOWN },
+      { element: 'F', position: equatorialPos(0, BOND_LEN) },
     ],
     bonds: [
       { from: 0, to: 1 },
@@ -163,59 +146,190 @@ function trigonalPyramidal(central: ElementSymbol, hAngleDeg: number): MoleculeD
       { from: 0, to: 3 },
     ],
     lonePairs: [
-      { position: [0, 0.85, 0], direction: [0, 1, 0] },
+      { position: equatorialPos(120, LONE_PAIR_RADIAL), direction: equatorialPos(120, 1) },
+      { position: equatorialPos(240, LONE_PAIR_RADIAL), direction: equatorialPos(240, 1) },
     ],
-    bondAngle: hAngleDeg,
-  }
-}
-
-/**
- * Build a bent (2 H + 2 lone pair) molecule. H atoms point down-and-out in
- * the xz plane; lone pairs point up-and-out perpendicular to the H plane.
- */
-function bent(central: ElementSymbol, hAngleDeg: number): MoleculeData {
-  const θ = (hAngleDeg * Math.PI) / 180
-  const sinHalf = Math.sin(θ / 2)
-  const cosHalf = Math.cos(θ / 2)
-  // H atoms in xz plane, symmetric about z, both pointing -y
-  const h1: [number, number, number] = [sinHalf, -cosHalf, 0]
-  const h2: [number, number, number] = [-sinHalf, -cosHalf, 0]
-  // Lone pairs in yz plane, symmetric, pointing +y
-  // Approximate lone-pair-X-lone-pair as ~115° (a bit wider than H-O-H).
-  const lpAngle = (115 * Math.PI) / 180
-  const lpSin = Math.sin(lpAngle / 2)
-  const lpCos = Math.cos(lpAngle / 2)
-  const lp1: [number, number, number] = [0, lpCos, lpSin]
-  const lp2: [number, number, number] = [0, lpCos, -lpSin]
-  return {
-    atoms: [
-      { element: central, position: [0, 0, 0] },
-      { element: 'H', position: h1 },
-      { element: 'H', position: h2 },
-    ],
-    bonds: [
-      { from: 0, to: 1 },
-      { from: 0, to: 2 },
-    ],
-    lonePairs: [
-      { position: [lp1[0] * 0.85, lp1[1] * 0.85, lp1[2] * 0.85], direction: lp1 },
-      { position: [lp2[0] * 0.85, lp2[1] * 0.85, lp2[2] * 0.85], direction: lp2 },
-    ],
-    bondAngle: hAngleDeg,
+    bondAnglePair: [1, 2],
+    bondAngle: 180,
+    hasEquatorialPlane: true,
+    shapeName: 'T-shaped',
   }
 }
 
 export function moleculeData(name: Molecule): MoleculeData {
   switch (name) {
-    case 'methane':
-      return tetrahedralFourH('C')
-    case 'ammonium':
-      return tetrahedralFourH('N')
-    case 'ammonia':
-      return trigonalPyramidal('N', 107)
-    case 'water':
-      return bent('O', 104.5)
+    case 'xef2':
+      return xef2()
+    case 'xef2-axial-strain':
+      return xef2AxialStrain()
+    case 'clf3':
+      return clf3()
   }
+}
+
+const ATOM_RADIUS: Record<ElementSymbol, number> = {
+  Xe: 0.45,
+  F: 0.24,
+  Cl: 0.36,
+}
+
+const ATOM_COLOR: Record<ElementSymbol, number> = {
+  Xe: 0x8b6dd5,
+  F: 0xb8c75c,
+  Cl: 0x7a8f3e,
+}
+
+const BOND_RADIUS = 0.07
+const BOND_COLOR = 0x9a958e
+const BOND_TOWARD_COLOR = 0x4a4540
+const BOND_AWAY_COLOR = 0x6b665e
+
+const LONE_PAIR_COLOR = 0x6b46c1
+const LONE_PAIR_OPACITY = 0.62
+
+const EQUATORIAL_PLANE_COLOR = 0xc6b8e8
+const EQUATORIAL_PLANE_OPACITY = 0.18
+const EQUATORIAL_PLANE_RING_COLOR = 0x8b6dd5
+const EQUATORIAL_PLANE_RING_OPACITY = 0.4
+
+const ANGLE_LINE_COLOR = 0x5a544c
+const ANGLE_LINE_OPACITY = 0.7
+
+// ---------------------------------------------------------------------------
+// Treatments — drive a per-panel rendering mode.
+// ---------------------------------------------------------------------------
+
+type Treatment = 'default' | 'lewis' | 'wedge' | 'geometry'
+
+type TreatmentTarget = {
+  cameraPos: THREE.Vector3
+  fov: number
+  enableRotate: boolean
+  filter: string
+}
+
+const DEFAULT_CAM = new THREE.Vector3(3.2, 1.6, 4.6)
+// Head-on, telephoto-leaning so the scene reads as a "flat" Lewis-style
+// diagram. The combination of FOV 25 and distance 9 gives the molecule the
+// same projected size as the default treatment (after safeAreaZoom), so the
+// axial F's stay comfortably inside the safe rectangle and don't slip under
+// the header overlay.
+const LEWIS_CAM = new THREE.Vector3(0, 0, 9)
+const WEDGE_CAM = new THREE.Vector3(3.6, 1.0, 4.0)
+const GEOMETRY_CAM = new THREE.Vector3(3.0, 1.4, 4.6)
+
+const TREATMENT_TARGETS: Record<Treatment, TreatmentTarget> = {
+  default: {
+    cameraPos: DEFAULT_CAM,
+    fov: 40,
+    enableRotate: true,
+    filter: 'none',
+  },
+  lewis: {
+    cameraPos: LEWIS_CAM,
+    fov: 25,
+    enableRotate: true,
+    filter: 'grayscale(0.6) contrast(0.95) brightness(1.03)',
+  },
+  wedge: {
+    cameraPos: WEDGE_CAM,
+    fov: 40,
+    enableRotate: true,
+    filter: 'none',
+  },
+  geometry: {
+    cameraPos: GEOMETRY_CAM,
+    fov: 40,
+    enableRotate: true,
+    filter: 'saturate(0.55)',
+  },
+}
+
+function panelToTreatment(panel: RepresentationPanelId | null | undefined): Treatment {
+  if (panel === 'lewis') return 'lewis'
+  if (panel === 'wedge') return 'wedge'
+  if (panel === 'geometry') return 'geometry'
+  return 'default'
+}
+
+type SafeInsets = {
+  top: number
+  right: number
+  bottom: number
+}
+
+/**
+ * Shift the rendered molecule so it sits centered in the "safe area" — the
+ * canvas minus the overlaid UI on each edge. Uses Three.js's view-offset
+ * mechanism: tell the camera it's rendering a sub-window of a virtual
+ * viewport that is `top + bottom` taller and `right` wider, with our window
+ * aligned so the molecule (otherwise at virtual center) ends up at the safe
+ * area's center within our actual canvas.
+ *
+ * Math: setViewOffset(fullW, fullH, offX, offY, w, h). Molecule at virtual
+ * center = (fullW/2, fullH/2). Its position in our window = virtual center −
+ * (offX, offY). For the molecule to appear at the safe area center we want:
+ *   - x: (W − rightInset)/2 → offX = rightInset
+ *   - y: (H + topInset − bottomInset)/2 → offY = bottomInset
+ * Then fullW = W + rightInset, fullH = H + topInset + bottomInset gives the
+ * desired projection. Left inset is 0 by convention here (we don't overlay
+ * on the left).
+ *
+ * Pixel ratios cancel out — fullW/fullH and w/h share units, so passing CSS
+ * pixels works regardless of devicePixelRatio.
+ */
+function applyViewOffset(
+  camera: THREE.PerspectiveCamera,
+  width: number,
+  height: number,
+  insets: SafeInsets,
+) {
+  if (width <= 0 || height <= 0) return
+  const totalY = insets.top + insets.bottom
+  if (insets.right <= 0 && totalY <= 0) {
+    camera.clearViewOffset()
+    return
+  }
+  const fullW = width + insets.right
+  const fullH = height + totalY
+  camera.setViewOffset(fullW, fullH, insets.right, insets.bottom, width, height)
+}
+
+/**
+ * Compute the zoom factor that scales the projection so the molecule fits
+ * within the safe area (canvas minus overlaid UI). Used for the initial view
+ * and Reset View; user dolly/pan can take the molecule outside the safe
+ * area, which is fine. Only applied to the default treatment; the panel
+ * treatments (lewis/wedge/geometry) keep zoom=1 so their carefully tuned
+ * camera positions and FOVs aren't distorted.
+ *
+ * Picks the more constraining axis (the molecule must fit both horizontally
+ * and vertically) so the safe area never overflows.
+ */
+function safeAreaZoom(width: number, height: number, insets: SafeInsets): number {
+  if (width <= 0 || height <= 0) return 1
+  const horizRatio = (width - insets.right) / width
+  const vertRatio = (height - insets.top - insets.bottom) / height
+  // The 0.95 multiplier leaves a small visual margin inside the safe area
+  // without aggressively shrinking the molecule. (Previously 0.8 when bonds
+  // were 1.5 long; with the now-shorter 1.2 bonds the molecule has more
+  // headroom, so we can let it fill more of the safe rectangle.)
+  const ratio = Math.min(horizRatio, vertRatio) * 0.95
+  return Math.max(0.3, Math.min(1, ratio))
+}
+
+function targetZoomForTreatment(
+  _treatment: Treatment,
+  width: number,
+  height: number,
+  insets: SafeInsets,
+): number {
+  // All treatments share the safe-area zoom so the molecule always fits in
+  // the rectangle left by the overlaid UI. Originally only `default` used
+  // this and panel treatments stayed at zoom=1, which combined with their
+  // specific FOVs/camera positions could clip the molecule (most visibly
+  // Lewis at FOV 8) or push it under the right pane.
+  return safeAreaZoom(width, height, insets)
 }
 
 // ---------------------------------------------------------------------------
@@ -225,12 +339,39 @@ export function moleculeData(name: Molecule): MoleculeData {
 type MoleculeSceneProps = {
   molecule: Molecule
   chipState: ChipState
-  /** When set, the scene fades parts the active panel's representation omits. */
+  /** Drives the per-panel rendering treatment. */
   activePanel?: RepresentationPanelId | null
+  /** Called with positive rotation deltas (radians) every orbit-controls tick.
+   *  The parent accumulates these toward the rotation gate. */
+  onRotationDelta?: (deltaRad: number) => void
+  /** Called when the user clicks the Reset View button while a non-default
+   *  treatment is active. The parent should clear `activePanel` in response;
+   *  Reset View always resets the camera locally before this fires. */
+  onExitTreatment?: () => void
+  /** Reserved space (CSS pixels) on each edge of the canvas for overlaid UI:
+   *  - `top`    — typically the affixed header
+   *  - `right`  — typically the floating right pane
+   *  - `bottom` — typically the representation-panels row
+   *  The projection is offset so the molecule renders centered in the
+   *  resulting safe area, and the camera zooms out so it fits within.
+   *  Default 0 on each edge (no inset). */
+  topOverlayInsetPx?: number
+  rightOverlayInsetPx?: number
+  bottomOverlayInsetPx?: number
   className?: string
 }
 
-export function MoleculeScene({ molecule, chipState, activePanel, className }: MoleculeSceneProps) {
+export function MoleculeScene({
+  molecule,
+  chipState,
+  activePanel,
+  onRotationDelta,
+  onExitTreatment,
+  topOverlayInsetPx = 0,
+  rightOverlayInsetPx = 0,
+  bottomOverlayInsetPx = 0,
+  className,
+}: MoleculeSceneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const refs = useRef<{
     scene: THREE.Scene
@@ -238,13 +379,51 @@ export function MoleculeScene({ molecule, chipState, activePanel, className }: M
     renderer: THREE.WebGLRenderer
     controls: OrbitControls
     moleculeGroup: THREE.Group
-    defaultCameraPos: THREE.Vector3
     resetView: () => void
+    /** Cache the camera forward at last build so wedge geometry stays stable
+     *  for the duration of the treatment. */
+    lastBuildForward: THREE.Vector3
   } | null>(null)
 
   const data = useMemo(() => moleculeData(molecule), [molecule])
+  const treatment = panelToTreatment(activePanel ?? null)
+  const [filterCss, setFilterCss] = useState<string>('none')
 
-  // Mount: build the scene exactly once.
+  // Refs the resize observer (inside the mount-once effect) reads to compute
+  // the right safe-area zoom for the current treatment.
+  const currentTreatmentRef = useRef<Treatment>(treatment)
+  useEffect(() => {
+    currentTreatmentRef.current = treatment
+  }, [treatment])
+
+  const onRotationDeltaRef = useRef(onRotationDelta)
+  useEffect(() => {
+    onRotationDeltaRef.current = onRotationDelta
+  }, [onRotationDelta])
+
+  // Cached so the resize observer (inside the mount-once effect) reads the
+  // latest insets without forcing a full scene rebuild on prop change.
+  const insetsRef = useRef<SafeInsets>({
+    top: topOverlayInsetPx,
+    right: rightOverlayInsetPx,
+    bottom: bottomOverlayInsetPx,
+  })
+  useEffect(() => {
+    insetsRef.current = {
+      top: topOverlayInsetPx,
+      right: rightOverlayInsetPx,
+      bottom: bottomOverlayInsetPx,
+    }
+    const r = refs.current
+    if (!r) return
+    const w = r.renderer.domElement.clientWidth
+    const h = r.renderer.domElement.clientHeight
+    applyViewOffset(r.camera, w, h, insetsRef.current)
+    r.camera.zoom = targetZoomForTreatment(currentTreatmentRef.current, w, h, insetsRef.current)
+    r.camera.updateProjectionMatrix()
+  }, [topOverlayInsetPx, rightOverlayInsetPx, bottomOverlayInsetPx])
+
+  // Mount: build scene, camera, renderer, controls.
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -255,8 +434,10 @@ export function MoleculeScene({ molecule, chipState, activePanel, className }: M
     scene.background = new THREE.Color(0xf5f3ef)
 
     const camera = new THREE.PerspectiveCamera(40, Math.max(width / height, 0.1), 0.1, 100)
-    const defaultCameraPos = new THREE.Vector3(0, 0.4, 4.2)
-    camera.position.copy(defaultCameraPos)
+    camera.position.copy(DEFAULT_CAM)
+    applyViewOffset(camera, width, height, insetsRef.current)
+    camera.zoom = safeAreaZoom(width, height, insetsRef.current)
+    camera.updateProjectionMatrix()
 
     const renderer = new THREE.WebGLRenderer({ antialias: true })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -266,12 +447,10 @@ export function MoleculeScene({ molecule, chipState, activePanel, className }: M
     renderer.toneMappingExposure = 1.0
     container.appendChild(renderer.domElement)
 
-    // Lighting: soft ambient + one directional. Matte materials only.
     scene.add(new THREE.AmbientLight(0xffffff, 0.72))
     const dir = new THREE.DirectionalLight(0xffffff, 1.15)
     dir.position.set(2.5, 3.5, 4)
     scene.add(dir)
-    // Subtle rim light to keep darker atoms (C, N, O) from going muddy.
     const rim = new THREE.DirectionalLight(0xfff4e8, 0.35)
     rim.position.set(-3, 1, -2)
     scene.add(rim)
@@ -280,25 +459,44 @@ export function MoleculeScene({ molecule, chipState, activePanel, className }: M
     controls.enableDamping = true
     controls.dampingFactor = 0.08
     controls.enablePan = false
-    controls.minDistance = 2.4
-    controls.maxDistance = 7
+    controls.minDistance = 2.8
+    // maxDistance 12 lets the telephoto-leaning Lewis treatment (camera at
+    // z=9) sit inside the controls' allowed range; without this the controls
+    // would clamp the position back to 8 after the treatment animation
+    // settled and the user touched the molecule.
+    controls.maxDistance = 12
     controls.target.set(0, 0, 0)
     controls.autoRotate = true
     controls.autoRotateSpeed = 0.6
     controls.update()
 
-    // Stop auto-rotation on first user interaction.
-    const stopAutoRotate = () => {
+    // Rotation accumulator — track the spherical angle change per frame and
+    // notify parent with positive deltas. autoRotate's contribution doesn't
+    // count toward the gate; we only forward deltas from user interaction.
+    let lastAzimuth = controls.getAzimuthalAngle()
+    let lastPolar = controls.getPolarAngle()
+    let userInteracting = false
+    const onStart = () => {
       controls.autoRotate = false
+      userInteracting = true
+      lastAzimuth = controls.getAzimuthalAngle()
+      lastPolar = controls.getPolarAngle()
     }
-    controls.addEventListener('start', stopAutoRotate)
+    const onEnd = () => {
+      userInteracting = false
+    }
+    controls.addEventListener('start', onStart)
+    controls.addEventListener('end', onEnd)
 
     const moleculeGroup = new THREE.Group()
     scene.add(moleculeGroup)
-    buildMolecule(moleculeGroup, data, chipState)
+
+    const lastBuildForward = new THREE.Vector3()
+    camera.getWorldDirection(lastBuildForward)
+    buildScene(moleculeGroup, data, chipState, 'default', lastBuildForward, false)
 
     const resetView = () => {
-      camera.position.copy(defaultCameraPos)
+      camera.position.copy(DEFAULT_CAM)
       controls.target.set(0, 0, 0)
       controls.update()
     }
@@ -306,6 +504,19 @@ export function MoleculeScene({ molecule, chipState, activePanel, className }: M
     let rafId = 0
     const tick = () => {
       controls.update()
+
+      if (userInteracting) {
+        const az = controls.getAzimuthalAngle()
+        const pol = controls.getPolarAngle()
+        const dAz = Math.abs(az - lastAzimuth)
+        const dPol = Math.abs(pol - lastPolar)
+        // Wrap-around guard: ignore jumps larger than ~90° per frame.
+        const delta = (dAz < Math.PI / 2 ? dAz : 0) + (dPol < Math.PI / 2 ? dPol : 0)
+        if (delta > 0) onRotationDeltaRef.current?.(delta)
+        lastAzimuth = az
+        lastPolar = pol
+      }
+
       renderer.render(scene, camera)
       rafId = requestAnimationFrame(tick)
     }
@@ -318,6 +529,16 @@ export function MoleculeScene({ molecule, chipState, activePanel, className }: M
         renderer.setSize(w, h)
         camera.aspect = w / h
         camera.updateProjectionMatrix()
+        applyViewOffset(camera, w, h, insetsRef.current)
+        // Re-apply safe-area zoom for the current treatment so the molecule
+        // stays appropriately scaled when the viewport size changes.
+        camera.zoom = targetZoomForTreatment(
+          currentTreatmentRef.current,
+          w,
+          h,
+          insetsRef.current,
+        )
+        camera.updateProjectionMatrix()
       }
     })
     ro.observe(container)
@@ -328,14 +549,15 @@ export function MoleculeScene({ molecule, chipState, activePanel, className }: M
       renderer,
       controls,
       moleculeGroup,
-      defaultCameraPos,
       resetView,
+      lastBuildForward,
     }
 
     return () => {
       cancelAnimationFrame(rafId)
       ro.disconnect()
-      controls.removeEventListener('start', stopAutoRotate)
+      controls.removeEventListener('start', onStart)
+      controls.removeEventListener('end', onEnd)
       controls.dispose()
       disposeGroup(moleculeGroup)
       renderer.dispose()
@@ -346,39 +568,97 @@ export function MoleculeScene({ molecule, chipState, activePanel, className }: M
       }
       refs.current = null
     }
-    // Intentionally empty deps — the scene is built once. Updates flow
-    // through the effects below.
+    // Intentionally empty deps — scene is built once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Rebuild the molecule when data or chipState changes.
-  //   - Molecule (data) change: fade-out → swap → fade-in (~700ms total).
-  //     This is the "don't snap-cut" requirement from the spec.
-  //   - chipState-only change: instant rebuild (toggling Bonds / Lone pairs
-  //     etc. should be responsive, not animated).
-  const prevDataRef = useRef<MoleculeData | null>(null)
-  const activePanelRef = useRef<RepresentationPanelId | null>(activePanel ?? null)
-  activePanelRef.current = activePanel ?? null
-
+  // Animate camera + FOV to the treatment target. Runs whenever treatment
+  // changes. The CSS filter cross-fades alongside.
   useEffect(() => {
     const r = refs.current
     if (!r) return
+    const target = TREATMENT_TARGETS[treatment]
 
+    // Disable user rotation immediately for non-default treatments so the
+    // canonical view stays put through the animation.
+    r.controls.autoRotate = false
+    r.controls.enableRotate = target.enableRotate
+
+    const startPos = r.camera.position.clone()
+    const endPos = target.cameraPos.clone()
+    const startFov = r.camera.fov
+    const endFov = target.fov
+    const startZoom = r.camera.zoom
+    const endZoom = targetZoomForTreatment(
+      treatment,
+      r.renderer.domElement.clientWidth,
+      r.renderer.domElement.clientHeight,
+      insetsRef.current,
+    )
+
+    const duration = 380
+    const startTs = performance.now()
+    let cancelled = false
+    let rafId = 0
+
+    const tick = () => {
+      if (cancelled) return
+      const now = performance.now()
+      const t = Math.min((now - startTs) / duration, 1)
+      const eased = 1 - Math.pow(1 - t, 3)
+
+      r.camera.position.lerpVectors(startPos, endPos, eased)
+      r.camera.fov = startFov + (endFov - startFov) * eased
+      r.camera.zoom = startZoom + (endZoom - startZoom) * eased
+      r.camera.updateProjectionMatrix()
+      r.controls.target.set(0, 0, 0)
+
+      if (t >= 1) {
+        // Rebuild the molecule using the post-animation camera forward so
+        // wedge geometry reflects the final view.
+        r.camera.getWorldDirection(r.lastBuildForward)
+        disposeGroup(r.moleculeGroup)
+        r.moleculeGroup.clear()
+        buildScene(
+          r.moleculeGroup,
+          data,
+          chipState,
+          treatment,
+          r.lastBuildForward,
+          true,
+        )
+        return
+      }
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+
+    setFilterCss(target.filter)
+
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(rafId)
+    }
+  }, [treatment, data, chipState])
+
+  // Rebuild on molecule or chipState change (cross-fade molecule swap).
+  const prevDataRef = useRef<MoleculeData | null>(null)
+  useEffect(() => {
+    const r = refs.current
+    if (!r) return
     const prev = prevDataRef.current
     prevDataRef.current = data
     const isInitial = prev === null
     const dataChanged = !isInitial && prev !== data
 
     if (isInitial || !dataChanged) {
-      // First build, or chipState-only change → instant rebuild.
+      r.camera.getWorldDirection(r.lastBuildForward)
       disposeGroup(r.moleculeGroup)
       r.moleculeGroup.clear()
-      buildMolecule(r.moleculeGroup, data, chipState)
-      applyAnnotationMode(r.moleculeGroup, activePanelRef.current)
+      buildScene(r.moleculeGroup, data, chipState, treatment, r.lastBuildForward, true)
       return
     }
 
-    // Molecule changed → fade transition.
     const FADE_OUT_MS = 320
     const FADE_IN_MS = 380
     let rafId = 0
@@ -391,18 +671,15 @@ export function MoleculeScene({ molecule, chipState, activePanel, className }: M
       const now = performance.now()
       const duration = phase === 'out' ? FADE_OUT_MS : FADE_IN_MS
       const t = Math.min((now - phaseStart) / duration, 1)
-      // ease-out quad
       const eased = 1 - Math.pow(1 - t, 2)
 
       if (phase === 'out') {
         applyTransitionScalar(r.moleculeGroup, 1 - eased)
         if (t >= 1) {
+          r.camera.getWorldDirection(r.lastBuildForward)
           disposeGroup(r.moleculeGroup)
           r.moleculeGroup.clear()
-          buildMolecule(r.moleculeGroup, data, chipState)
-          // Re-apply annotation mode with new mesh refs.
-          applyAnnotationMode(r.moleculeGroup, activePanelRef.current)
-          // Start fade-in at opacity 0.
+          buildScene(r.moleculeGroup, data, chipState, treatment, r.lastBuildForward, true)
           applyTransitionScalar(r.moleculeGroup, 0)
           phase = 'in'
           phaseStart = performance.now()
@@ -410,7 +687,6 @@ export function MoleculeScene({ molecule, chipState, activePanel, className }: M
       } else {
         applyTransitionScalar(r.moleculeGroup, eased)
         if (t >= 1) {
-          // Final state — full opacity, but keep annotation scalars.
           applyTransitionScalar(r.moleculeGroup, 1)
           return
         }
@@ -422,47 +698,164 @@ export function MoleculeScene({ molecule, chipState, activePanel, className }: M
     return () => {
       cancelled = true
       cancelAnimationFrame(rafId)
-      // If the user starts a new transition mid-fade, snap to a clean state
-      // so the next mount/rebuild isn't fighting a stale opacity scalar.
       applyTransitionScalar(r.moleculeGroup, 1)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, chipState])
 
-  // Annotation mode — fade parts the active panel's representation omits.
-  // Updates the annotation scalar layer; transitions operate on a separate
-  // scalar so they don't trample each other.
-  useEffect(() => {
-    const r = refs.current
-    if (!r) return
-    applyAnnotationMode(r.moleculeGroup, activePanel ?? null)
-  }, [activePanel])
-
   return (
-    <div
-      ref={containerRef}
-      className={cn('relative size-full overflow-hidden rounded-md', className)}
-    >
-      <ResetViewButton onClick={() => refs.current?.resetView()} />
+    <div className={cn('relative size-full', className)}>
+      <div
+        ref={containerRef}
+        className="absolute inset-0 overflow-hidden"
+        style={{ filter: filterCss, transition: 'filter 380ms ease-out' }}
+      />
+      <SceneLegend
+        molecule={molecule}
+        chipState={chipState}
+        treatment={treatment}
+        topInsetPx={topOverlayInsetPx}
+      />
+      <ResetViewButton
+        onClick={() => {
+          refs.current?.resetView()
+          if (treatment !== 'default') onExitTreatment?.()
+        }}
+        topInsetPx={topOverlayInsetPx}
+        rightInsetPx={rightOverlayInsetPx}
+      />
     </div>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Scene building helpers
+// Overlays — legend (what's in the scene) and reset-view affordance.
+// ---------------------------------------------------------------------------
+
+const ELEMENT_LABEL: Record<ElementSymbol, string> = {
+  Xe: 'Xenon',
+  F: 'Fluorine',
+  Cl: 'Chlorine',
+}
+
+function SceneLegend({
+  molecule,
+  chipState,
+  treatment,
+  topInsetPx,
+}: {
+  molecule: Molecule
+  chipState: ChipState
+  treatment: Treatment
+  topInsetPx: number
+}) {
+  const data = moleculeData(molecule)
+  const seen = new Set<ElementSymbol>()
+  const elements: ElementSymbol[] = []
+  for (const a of data.atoms) {
+    if (!seen.has(a.element)) {
+      seen.add(a.element)
+      elements.push(a.element)
+    }
+  }
+
+  const showLonePairs = chipState.lonePairs && treatment !== 'wedge' && treatment !== 'geometry'
+  const showPlane = (chipState.equatorialPlane || treatment === 'geometry') && treatment !== 'lewis' && treatment !== 'wedge'
+
+  // Wedge mode shows just the element labels — there are no lone pairs or
+  // plane to call out, but the atom identification is still useful.
+  // Otherwise only show the legend when there's something beyond atoms+bonds.
+  if (!showLonePairs && !showPlane && treatment !== 'wedge') return null
+
+  // Sit inside the safe area — below the overlaid header (topInsetPx) with a
+  // small additional gap so the legend doesn't bump right into the header's
+  // bottom border.
+  const top = topInsetPx > 0 ? topInsetPx - 4 : 8
+  return (
+    <div
+      style={{ top: `${top}px`, left: 12 }}
+      className="border-border-subtle bg-page/85 text-text-secondary pointer-events-none absolute z-10 flex flex-col gap-1 rounded-md border px-2.5 py-2 text-[12px] backdrop-blur-sm"
+    >
+      {elements.map((e) => (
+        <span key={e} className="flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="inline-block size-2 rounded-full"
+            style={{ backgroundColor: `#${ATOM_COLOR[e].toString(16).padStart(6, '0')}` }}
+          />
+          <span>{ELEMENT_LABEL[e]}</span>
+        </span>
+      ))}
+      {showLonePairs && (
+        <span className="flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="inline-block h-3 w-2 rounded-full opacity-70"
+            style={{ backgroundColor: '#6b46c1' }}
+          />
+          <span>Lone pair</span>
+        </span>
+      )}
+      {showPlane && (
+        <span className="flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="inline-block size-2 rounded-sm"
+            style={{ backgroundColor: '#c6b8e8' }}
+          />
+          <span>Equatorial plane</span>
+        </span>
+      )}
+    </div>
+  )
+}
+
+function ResetViewButton({
+  onClick,
+  topInsetPx,
+  rightInsetPx,
+}: {
+  onClick: () => void
+  topInsetPx: number
+  rightInsetPx: number
+}) {
+  // Stay inside the safe area: below the overlaid header (topInset) and left
+  // of the floating right pane (rightInset).
+  const top = topInsetPx > 0 ? topInsetPx - 4 : 8
+  const right = rightInsetPx > 0 ? rightInsetPx + 4 : 8
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{ top: `${top}px`, right: `${right}px` }}
+      className={cn(
+        'absolute z-10 inline-flex items-center gap-1 rounded-md',
+        'border border-border-subtle bg-page/85 px-2.5 py-1.5 text-[12px]',
+        'text-text-secondary hover:text-text-primary hover:bg-page',
+        'backdrop-blur-sm transition-colors',
+      )}
+      aria-label="Reset view"
+    >
+      Reset view
+    </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Scene building
 // ---------------------------------------------------------------------------
 
 const USERDATA_KIND = 'kind'
-type SceneObjectKind = 'atom' | 'bond' | 'lone-pair' | 'orbital-lobe' | 'angle-label'
+type SceneObjectKind =
+  | 'atom'
+  | 'bond'
+  | 'lone-pair'
+  | 'equatorial-plane'
+  | 'angle-label'
 
-/**
- * Per-mesh opacity layering. Final opacity = base × transition × annotation.
- * Stored in userData so it survives across the various rebuild / transition
- * effects without them stepping on each other.
- */
 type OpacityLayers = {
   base: number
   transition: number
-  annotation: number
 }
 const USERDATA_OPACITY = 'opacity'
 
@@ -471,7 +864,7 @@ function tagObject(o: THREE.Object3D, kind: SceneObjectKind) {
 }
 
 function tagMeshOpacity(mesh: THREE.Mesh | THREE.Line | THREE.Sprite, base: number) {
-  const layers: OpacityLayers = { base, transition: 1, annotation: 1 }
+  const layers: OpacityLayers = { base, transition: 1 }
   mesh.userData[USERDATA_OPACITY] = layers
   applyMeshOpacity(mesh)
 }
@@ -481,10 +874,10 @@ function applyMeshOpacity(mesh: THREE.Mesh | THREE.Line | THREE.Sprite) {
   if (!layers) return
   const mat = mesh.material as
     | THREE.MeshStandardMaterial
+    | THREE.MeshBasicMaterial
     | THREE.LineBasicMaterial
     | THREE.SpriteMaterial
-  const next = layers.base * layers.transition * layers.annotation
-  // Materials need transparent=true when opacity < 1 to actually blend.
+  const next = layers.base * layers.transition
   mat.transparent = next < 1
   mat.opacity = next
 }
@@ -499,14 +892,49 @@ function applyTransitionScalar(group: THREE.Group, scalar: number) {
   })
 }
 
-function buildMolecule(group: THREE.Group, data: MoleculeData, chipState: ChipState) {
-  // Atoms — always rendered. Atoms chip is locked on in the UI.
+/**
+ * Build the molecule's geometry given the current treatment.
+ *
+ * Each treatment picks which primitives to draw and which to hide. Bond
+ * style varies by treatment too — wedge mode swaps cylinders for tapered
+ * cones or dashed segments based on the bond's angle to the camera.
+ */
+function buildScene(
+  group: THREE.Group,
+  data: MoleculeData,
+  chipState: ChipState,
+  treatment: Treatment,
+  cameraForward: THREE.Vector3,
+  /** Whether to fully build (true) or skip while the camera animation is
+   *  still in flight (false → simplified build to avoid a flash). */
+  fullBuild: boolean,
+) {
+  const showLonePairs = chipState.lonePairs && treatment !== 'wedge' && treatment !== 'geometry'
+  const showEquatorialPlane =
+    (chipState.equatorialPlane || treatment === 'geometry') &&
+    data.hasEquatorialPlane &&
+    treatment !== 'wedge' &&
+    treatment !== 'lewis'
+  const showAngles =
+    (chipState.angles || treatment === 'geometry') &&
+    !!data.bondAnglePair &&
+    data.bondAngle !== undefined &&
+    treatment !== 'wedge' &&
+    treatment !== 'lewis'
+
+  // Atoms — always rendered. In geometry treatment, lerp colors toward
+  // neutral so the abstract structure reads first.
   for (const atom of data.atoms) {
     const geom = new THREE.SphereGeometry(ATOM_RADIUS[atom.element], 32, 32)
+    const color = new THREE.Color(ATOM_COLOR[atom.element])
+    if (treatment === 'geometry') {
+      color.lerp(new THREE.Color(0xa8a39a), 0.55)
+    }
     const mat = new THREE.MeshStandardMaterial({
-      color: ATOM_COLOR[atom.element],
-      roughness: 0.55,
+      color,
+      roughness: treatment === 'lewis' ? 0.95 : 0.55,
       metalness: 0.0,
+      flatShading: treatment === 'lewis',
     })
     const mesh = new THREE.Mesh(geom, mat)
     mesh.position.set(...atom.position)
@@ -515,58 +943,57 @@ function buildMolecule(group: THREE.Group, data: MoleculeData, chipState: ChipSt
     group.add(mesh)
   }
 
-  // Bonds.
+  if (!fullBuild) return
+
+  // Bonds — style depends on treatment.
   if (chipState.bonds) {
     for (const bond of data.bonds) {
       const a = data.atoms[bond.from]
       const b = data.atoms[bond.to]
-      group.add(makeBond(a.position, b.position))
+      if (treatment === 'wedge') {
+        group.add(makeWedgeOrDashBond(a.position, b.position, cameraForward))
+      } else if (treatment === 'lewis') {
+        group.add(makeBond(a.position, b.position, 0x2f2c28, BOND_RADIUS * 0.7))
+      } else {
+        group.add(makeBond(a.position, b.position, BOND_COLOR, BOND_RADIUS))
+      }
     }
   }
 
-  // Lone pairs — translucent ellipsoidal clouds.
-  if (chipState.lonePairs) {
+  if (showLonePairs) {
     for (const lp of data.lonePairs) {
       group.add(makeLonePair(lp.position, lp.direction))
     }
   }
 
-  // Orbital lobes — elongated teardrop shapes from the central atom along
-  // each bond and each lone pair direction (sp³ hybrid lobes).
-  if (chipState.orbitals) {
-    const central = data.atoms[0]
-    // Bonds: from central atom toward each bonded H
-    for (const bond of data.bonds) {
-      const other = data.atoms[bond.to]
-      const dir = new THREE.Vector3(...other.position).sub(new THREE.Vector3(...central.position))
-      group.add(makeOrbitalLobe(central.position, dir))
-    }
-    // Lone pair lobes
-    for (const lp of data.lonePairs) {
-      group.add(makeOrbitalLobe(central.position, new THREE.Vector3(...lp.direction)))
-    }
+  if (showEquatorialPlane) {
+    group.add(
+      makeEquatorialPlane(treatment === 'geometry' ? 0.32 : EQUATORIAL_PLANE_OPACITY),
+    )
   }
 
-  // Bond-angle annotations — small text labels at the central atom showing
-  // the H–X–H angle, with a subtle arc indicator.
-  if (chipState.angles && data.bonds.length >= 2) {
-    group.add(makeAngleAnnotation(data))
+  if (showAngles) {
+    group.add(makeAngleAnnotation(data, treatment === 'geometry'))
   }
 }
 
-function makeBond(a: [number, number, number], b: [number, number, number]): THREE.Mesh {
+function makeBond(
+  a: [number, number, number],
+  b: [number, number, number],
+  color: number,
+  radius: number,
+): THREE.Mesh {
   const start = new THREE.Vector3(...a)
   const end = new THREE.Vector3(...b)
   const direction = new THREE.Vector3().subVectors(end, start)
   const length = direction.length()
-  const geom = new THREE.CylinderGeometry(BOND_RADIUS, BOND_RADIUS, length, 16)
+  const geom = new THREE.CylinderGeometry(radius, radius, length, 16)
   const mat = new THREE.MeshStandardMaterial({
-    color: BOND_COLOR,
+    color,
     roughness: 0.6,
     metalness: 0.0,
   })
   const mesh = new THREE.Mesh(geom, mat)
-  // Position at midpoint, orient along the bond direction.
   const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5)
   mesh.position.copy(mid)
   mesh.quaternion.setFromUnitVectors(
@@ -578,12 +1005,103 @@ function makeBond(a: [number, number, number], b: [number, number, number]): THR
   return mesh
 }
 
+/**
+ * Pick wedge / dash / in-plane bond rendering based on the bond's projected
+ * angle to the camera forward direction.
+ *
+ *   |dot| < 0.15  →  in-plane, render as a thin flat cylinder
+ *   dot >= 0.15   →  outer atom toward viewer, render as a wedge (cone
+ *                    with point at central atom)
+ *   dot <= -0.15  →  outer atom behind, render as a dashed cylinder
+ */
+function makeWedgeOrDashBond(
+  a: [number, number, number],
+  b: [number, number, number],
+  cameraForward: THREE.Vector3,
+): THREE.Object3D {
+  const start = new THREE.Vector3(...a)
+  const end = new THREE.Vector3(...b)
+  const direction = new THREE.Vector3().subVectors(end, start)
+  const length = direction.length()
+  const unit = direction.clone().normalize()
+  // Camera forward points INTO the scene. Bond going TOWARD viewer means
+  // the outer atom is closer to camera than the inner atom, i.e. the bond
+  // direction is mostly opposite the camera forward → dot < 0.
+  const dot = unit.dot(cameraForward)
+
+  if (dot < -0.15) {
+    return makeWedge(start, end, length, BOND_TOWARD_COLOR)
+  }
+  if (dot > 0.15) {
+    return makeDashedBond(start, end, length, BOND_AWAY_COLOR)
+  }
+  // In-plane — flat cylinder.
+  return makeBond(a, b, BOND_COLOR, BOND_RADIUS)
+}
+
+function makeWedge(
+  start: THREE.Vector3,
+  end: THREE.Vector3,
+  length: number,
+  color: number,
+): THREE.Mesh {
+  // Cone with point at the central atom (start) and wide at the outer atom
+  // (end). Cone geometry has its apex at +y by default; we orient so apex
+  // points toward `start`.
+  const geom = new THREE.ConeGeometry(BOND_RADIUS * 2.4, length, 24, 1, false)
+  const mat = new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.55,
+    metalness: 0.0,
+  })
+  const mesh = new THREE.Mesh(geom, mat)
+  // Cone default: apex at +y, base at -y. To put apex at start and base at
+  // end, place center at midpoint and orient -y toward `direction`.
+  const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5)
+  mesh.position.copy(mid)
+  const direction = new THREE.Vector3().subVectors(start, end).normalize()
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction)
+  tagObject(mesh, 'bond')
+  tagMeshOpacity(mesh, 1)
+  return mesh
+}
+
+function makeDashedBond(
+  start: THREE.Vector3,
+  end: THREE.Vector3,
+  length: number,
+  color: number,
+): THREE.Group {
+  // Render as N short cylinders along the bond direction with gaps between.
+  const grp = new THREE.Group()
+  const segments = 6
+  const segLen = length / (segments * 2 - 1)
+  const direction = new THREE.Vector3().subVectors(end, start).normalize()
+  for (let i = 0; i < segments; i++) {
+    const t = (i * 2 * segLen + segLen / 2) / length
+    const pos = new THREE.Vector3().lerpVectors(start, end, t)
+    const geom = new THREE.CylinderGeometry(BOND_RADIUS * 0.85, BOND_RADIUS * 0.85, segLen, 12)
+    const mat = new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.6,
+      metalness: 0.0,
+    })
+    const m = new THREE.Mesh(geom, mat)
+    m.position.copy(pos)
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction)
+    tagObject(m, 'bond')
+    tagMeshOpacity(m, 1)
+    grp.add(m)
+  }
+  tagObject(grp, 'bond')
+  return grp
+}
+
 function makeLonePair(
   position: [number, number, number],
   direction: [number, number, number],
 ): THREE.Mesh {
-  // Translucent ellipsoid — sphere geometry scaled along the direction.
-  const geom = new THREE.SphereGeometry(0.25, 24, 24)
+  const geom = new THREE.SphereGeometry(0.27, 24, 24)
   const mat = new THREE.MeshStandardMaterial({
     color: LONE_PAIR_COLOR,
     transparent: true,
@@ -594,95 +1112,71 @@ function makeLonePair(
   })
   const mesh = new THREE.Mesh(geom, mat)
   mesh.position.set(...position)
-  // Elongate along the direction.
   const dir = new THREE.Vector3(...direction).normalize()
   mesh.scale.set(0.7, 1.4, 0.7)
-  // Orient the long axis (local +y) along `direction`.
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir)
   tagObject(mesh, 'lone-pair')
   tagMeshOpacity(mesh, LONE_PAIR_OPACITY)
   return mesh
 }
 
-function makeOrbitalLobe(
-  origin: [number, number, number],
-  direction: THREE.Vector3,
-): THREE.Mesh {
-  // Elongated teardrop using a lathe geometry. Points sit on a teardrop
-  // profile from the origin (small tip) out to ~0.9 (broad belly).
-  const points: THREE.Vector2[] = []
-  const N = 16
-  for (let i = 0; i <= N; i++) {
-    const t = i / N
-    // Teardrop: radius peaks around t≈0.5, narrows to 0 at both ends.
-    const r = 0.18 * Math.sin(Math.PI * t) * (0.5 + 0.5 * t)
-    const y = 0.1 + t * 1.0
-    points.push(new THREE.Vector2(r, y))
-  }
-  const geom = new THREE.LatheGeometry(points, 24)
-  const mat = new THREE.MeshStandardMaterial({
-    color: ORBITAL_LOBE_COLOR,
+function makeEquatorialPlane(opacity: number): THREE.Group {
+  const grp = new THREE.Group()
+  const discGeom = new THREE.CircleGeometry(EQUATORIAL_PLANE_RADIUS, 64)
+  const discMat = new THREE.MeshBasicMaterial({
+    color: EQUATORIAL_PLANE_COLOR,
     transparent: true,
-    opacity: ORBITAL_LOBE_OPACITY,
-    roughness: 0.5,
-    metalness: 0.0,
+    opacity,
     side: THREE.DoubleSide,
     depthWrite: false,
   })
-  const mesh = new THREE.Mesh(geom, mat)
-  mesh.position.set(...origin)
-  const dir = direction.clone().normalize()
-  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir)
-  tagObject(mesh, 'orbital-lobe')
-  tagMeshOpacity(mesh, ORBITAL_LOBE_OPACITY)
-  return mesh
+  const disc = new THREE.Mesh(discGeom, discMat)
+  disc.rotation.x = -Math.PI / 2
+  tagMeshOpacity(disc, opacity)
+  grp.add(disc)
+
+  const ringGeom = new THREE.RingGeometry(
+    EQUATORIAL_PLANE_RADIUS - 0.02,
+    EQUATORIAL_PLANE_RADIUS,
+    64,
+  )
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: EQUATORIAL_PLANE_RING_COLOR,
+    transparent: true,
+    opacity: EQUATORIAL_PLANE_RING_OPACITY,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  })
+  const ring = new THREE.Mesh(ringGeom, ringMat)
+  ring.rotation.x = -Math.PI / 2
+  tagMeshOpacity(ring, EQUATORIAL_PLANE_RING_OPACITY)
+  grp.add(ring)
+
+  tagObject(grp, 'equatorial-plane')
+  return grp
 }
 
-function makeAngleAnnotation(data: MoleculeData): THREE.Group {
-  // Sprite-based degree label at the central atom, plus a thin arc indicator
-  // between the first two bonds. For prototype: a simple line "arc" with the
-  // angle text as a CanvasTexture sprite.
+function makeAngleAnnotation(data: MoleculeData, prominent: boolean): THREE.Group {
   const grp = new THREE.Group()
-  const central = new THREE.Vector3(...data.atoms[0].position)
-  const a = new THREE.Vector3(...data.atoms[data.bonds[0].to].position)
-    .sub(central)
-    .normalize()
-  const b = new THREE.Vector3(...data.atoms[data.bonds[1].to].position)
-    .sub(central)
-    .normalize()
+  const [iA, iB] = data.bondAnglePair!
+  const a = new THREE.Vector3(...data.atoms[iA].position)
+  const b = new THREE.Vector3(...data.atoms[iB].position)
 
-  // Subtle arc: a few line segments along the great-circle from a to b at
-  // radius 0.55 from the central atom.
-  const arcRadius = 0.55
-  const arcSteps = 24
-  const arcPoints: THREE.Vector3[] = []
-  for (let i = 0; i <= arcSteps; i++) {
-    const t = i / arcSteps
-    // slerp between unit vectors a and b
-    const angle = a.angleTo(b)
-    const sinθ = Math.sin(angle)
-    if (sinθ < 1e-6) break
-    const v = a
-      .clone()
-      .multiplyScalar(Math.sin((1 - t) * angle) / sinθ)
-      .add(b.clone().multiplyScalar(Math.sin(t * angle) / sinθ))
-    arcPoints.push(v.multiplyScalar(arcRadius).add(central))
+  if (data.bondAngle === 180) {
+    const lineGeom = new THREE.BufferGeometry().setFromPoints([a, b])
+    const lineMat = new THREE.LineBasicMaterial({
+      color: ANGLE_LINE_COLOR,
+      transparent: true,
+      opacity: prominent ? 1 : ANGLE_LINE_OPACITY,
+      linewidth: prominent ? 2 : 1,
+    })
+    const line = new THREE.Line(lineGeom, lineMat)
+    tagMeshOpacity(line, prominent ? 1 : ANGLE_LINE_OPACITY)
+    grp.add(line)
   }
-  const arcGeom = new THREE.BufferGeometry().setFromPoints(arcPoints)
-  const arcMat = new THREE.LineBasicMaterial({
-    color: ANGLE_ARC_COLOR,
-    transparent: true,
-    opacity: ANGLE_ARC_OPACITY,
-    linewidth: 2,
-  })
-  const arcLine = new THREE.Line(arcGeom, arcMat)
-  tagMeshOpacity(arcLine, ANGLE_ARC_OPACITY)
-  grp.add(arcLine)
 
-  // Sprite label at the arc midpoint.
-  const midDir = a.clone().add(b).normalize()
-  const labelPos = midDir.multiplyScalar(arcRadius + 0.18).add(central)
-  const sprite = makeTextSprite(`${data.bondAngle.toFixed(1)}°`)
+  const labelPos = a.clone().add(b).multiplyScalar(0.5).add(new THREE.Vector3(0.55, 0, 0))
+  const sprite = makeTextSprite(`${data.bondAngle}°`, prominent)
   sprite.position.copy(labelPos)
   tagMeshOpacity(sprite, 1)
   grp.add(sprite)
@@ -690,17 +1184,16 @@ function makeAngleAnnotation(data: MoleculeData): THREE.Group {
   return grp
 }
 
-function makeTextSprite(text: string): THREE.Sprite {
-  // Bare text — no container, no border. The degree value sits at the arc
-  // and reads as an annotation, not a UI chip.
+function makeTextSprite(text: string, prominent: boolean, colorHex?: number): THREE.Sprite {
   const canvas = document.createElement('canvas')
-  const w = 256
-  const h = 96
+  const w = 384
+  const h = 128
   canvas.width = w
   canvas.height = h
   const ctx = canvas.getContext('2d')!
-  ctx.fillStyle = '#4a4540'
-  ctx.font = '500 48px ui-sans-serif, system-ui, -apple-system, sans-serif'
+  const color = colorHex !== undefined ? `#${colorHex.toString(16).padStart(6, '0')}` : '#4a4540'
+  ctx.fillStyle = color
+  ctx.font = `${prominent ? 700 : 500} ${prominent ? 56 : 48}px ui-sans-serif, system-ui, -apple-system, sans-serif`
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   ctx.fillText(text, w / 2, h / 2 + 2)
@@ -708,9 +1201,6 @@ function makeTextSprite(text: string): THREE.Sprite {
   texture.needsUpdate = true
   texture.colorSpace = THREE.SRGBColorSpace
   texture.anisotropy = 4
-  // toneMapped: false keeps ACES from darkening the transparent canvas
-  // background. alphaTest discards near-transparent pixels so we don't
-  // see a square halo around the text.
   const mat = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
@@ -719,52 +1209,8 @@ function makeTextSprite(text: string): THREE.Sprite {
     toneMapped: false,
   })
   const sprite = new THREE.Sprite(mat)
-  sprite.scale.set(0.5, 0.19, 1)
+  sprite.scale.set(0.7, 0.24, 1)
   return sprite
-}
-
-// ---------------------------------------------------------------------------
-// Annotation mode — fade parts the active panel's representation omits.
-// ---------------------------------------------------------------------------
-
-const PANEL_OMITS: Record<RepresentationPanelId, SceneObjectKind[]> = {
-  // Lewis dot structure: atoms + bonds + lone pairs are captured;
-  // angles + orbital lobes are omitted.
-  lewis: ['angle-label', 'orbital-lobe'],
-  // Wedge-and-dash: atoms + bonds + angles are captured;
-  // lone pairs + orbital lobes are omitted (well, lone pairs are sometimes
-  // shown — but for the contrast we treat the diagram as bond-focused).
-  wedge: ['lone-pair', 'orbital-lobe'],
-  // Geometry card: angles + atoms are captured; lone pairs + orbitals
-  // are omitted from the card.
-  geometry: ['lone-pair', 'orbital-lobe'],
-}
-
-function applyAnnotationMode(group: THREE.Group, panel: RepresentationPanelId | null) {
-  const omitted = panel ? PANEL_OMITS[panel] : null
-  group.traverse((obj) => {
-    const kind = obj.userData[USERDATA_KIND] as SceneObjectKind | undefined
-    if (!kind) return
-    const isOmitted = omitted ? omitted.includes(kind) : false
-    const annotation = isOmitted ? 0.18 : 1
-    const meshes = collectMeshes(obj)
-    for (const m of meshes) {
-      const layers = m.userData[USERDATA_OPACITY] as OpacityLayers | undefined
-      if (!layers) continue
-      layers.annotation = annotation
-      applyMeshOpacity(m)
-    }
-  })
-}
-
-function collectMeshes(obj: THREE.Object3D): (THREE.Mesh | THREE.Line | THREE.Sprite)[] {
-  const out: (THREE.Mesh | THREE.Line | THREE.Sprite)[] = []
-  obj.traverse((c) => {
-    if ((c as THREE.Mesh).isMesh) out.push(c as THREE.Mesh)
-    else if ((c as THREE.Line).isLine) out.push(c as THREE.Line)
-    else if ((c as THREE.Sprite).isSprite) out.push(c as THREE.Sprite)
-  })
-  return out
 }
 
 function disposeGroup(group: THREE.Group) {
@@ -784,26 +1230,4 @@ function disposeGroup(group: THREE.Group) {
       ;(s.material as THREE.SpriteMaterial).dispose()
     }
   })
-}
-
-// ---------------------------------------------------------------------------
-// UI affordance
-// ---------------------------------------------------------------------------
-
-function ResetViewButton({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-md',
-        'border border-border-subtle bg-page/80 px-2 py-1 text-[10px]',
-        'text-text-tertiary hover:text-text-secondary hover:bg-page',
-        'backdrop-blur-sm transition-colors',
-      )}
-      aria-label="Reset view"
-    >
-      Reset view
-    </button>
-  )
 }

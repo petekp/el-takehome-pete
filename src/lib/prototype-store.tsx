@@ -12,56 +12,63 @@ import {
 } from 'react'
 import { CONCEPTS, type ConceptId } from './concepts'
 import {
-  classifyFreeText,
+  classifyPrediction1FreeText,
+  classifyPrediction2FreeText,
   CLOSING_BUBBLE,
   OPENING_BUBBLES,
-  PATHS,
   PREDICTION_1,
+  PREDICTION_2,
+  REVEAL_1_PATHS,
+  REVEAL_2_PATHS,
   type Bubble,
+  type ElementCue,
   type FocusState,
-  type MisconceptionKey,
   type Molecule,
+  type Prediction1Key,
+  type Prediction2Key,
 } from './artifact-script'
 import { useChatStore } from './chat-store'
+import type { ImageAttachment } from './types'
 
 /**
  * State umbrella for the artifact arc. Composed under ChatProvider so the
  * arc's own concerns — beat progression, the artifact's interactive state —
  * don't leak into the generic chat layer.
  *
- * After the chemistry pivot, the artifact additionally tracks:
+ * After the XeF2 pivot, the artifact additionally tracks:
  *   - activeMolecule: which molecule the 3D viewport is currently rendering.
- *     Each bubble can declare a `molecule` field; advancing the bubble
- *     mutates activeMolecule and triggers a smooth transition in the scene.
- *   - chipState: which toggle chips (bonds / lone pairs / orbitals / angles)
- *     are currently on. Atoms are always on.
- *   - panelsClicked: which representation panels the user has clicked. The
- *     Beat-3 explore-the-panels bubble gates on this list reaching length 2.
+ *   - chipState: which toggle chips (bonds / lone pairs / equatorial plane /
+ *     bond angles) are currently on. Atoms are always on. Lone pairs default
+ *     ON (they're the point of this artifact).
+ *   - rotated: whether the user has touched the 3D scene yet. Beat 3 gates
+ *     advancement on this so the visualization gets engagement before the
+ *     first prediction.
+ *   - activePanel: which representation panel is in "isolation mode" (Lewis-
+ *     focused beats dim the rest while she reads from a single panel).
+ *   - userAttachments: the photos the student attached on the trigger
+ *     message; surfaced as thumbnails in the "Your materials" panel.
  */
 
 export type ArcPath = 'wrapper' | 'learning'
 
 export type ArcBeat =
-  | 'idle' // no trigger fired
-  | 'choosing' // affordance shown; waiting for path selection
-  | 'wrapper-response' // wrapper (decline) path streaming/complete
-  | 'artifact-active' // artifact open inline in chat, user is engaging
-  | 'artifact-resolved' // artifact reached the closing bubble; resources visible
-  | 'wrapper-followup' // post-artifact follow-up message streaming/complete
+  | 'idle'
+  | 'choosing'
+  | 'wrapper-response'
+  | 'artifact-active'
+  | 'artifact-resolved'
+  | 'wrapper-followup'
 
 /**
- * Where the user is inside the artifact. Drives the bubble script the
- * Artifact component reads.
+ * Where the user is inside the artifact.
  *
- *   opening    — beats 1–5: introducing the panels, exploring them, the
- *                Lewis-omits-angles line, the transition to ammonia.
- *   predict-1  — beat 6: Lewis-tells-shape prediction surface.
- *   reveal-1   — beats 7–8: misconception-specific honor-and-correct, plus
- *                the shared lone-pair-takes-space content and the
- *                NH3↔NH4⁺ toggle moment.
- *   predict-2  — beat 9: water-bond-angle prediction surface.
- *   reveal-2   — beat 10: bond-angle reveal, branched per follow-up answer.
- *   closing    — beat 11: multi-lens framing + resources.
+ *   opening      — Beats 1–3: name the materials, read the Lewis, equatorial
+ *                  reveal (rotation-gated).
+ *   predict-1    — Beat 4: "why equatorial?" prediction.
+ *   reveal-1     — Beats 5–6: misconception branch + 180° bond-angle close.
+ *   predict-2    — Beat 7: "5 domains, 2 lone pairs — what shape?"
+ *   reveal-2     — Beat 8: ClF3 morph + T-shape reveal.
+ *   closing      — Beat 9: summary card + resources.
  */
 export type ArtifactStage =
   | 'opening'
@@ -71,17 +78,23 @@ export type ArtifactStage =
   | 'reveal-2'
   | 'closing'
 
-export type ArtifactPrediction = {
-  optionId?: string
+export type ArtifactPrediction1 = {
+  optionId?: Prediction1Key
   freeText?: string
-  misconceptionTag: MisconceptionKey
+  key: Prediction1Key
 }
 
-export type ChipKey = 'bonds' | 'lonePairs' | 'orbitals' | 'angles'
+export type ArtifactPrediction2 = {
+  optionId?: Prediction2Key
+  freeText?: string
+  key: Prediction2Key
+}
+
+export type ChipKey = 'bonds' | 'lonePairs' | 'equatorialPlane' | 'angles'
 
 export type ChipState = Record<ChipKey, boolean>
 
-export type RepresentationPanelId = 'lewis' | 'wedge' | 'geometry'
+export type RepresentationPanelId = 'materials' | 'lewis' | 'wedge' | 'geometry'
 
 export type ArtifactState = {
   stage: ArtifactStage
@@ -89,27 +102,29 @@ export type ArtifactState = {
   focus: FocusState
   activeMolecule: Molecule
   chipState: ChipState
-  /** Representation panels the user has clicked. Drives the Beat-3 gate
-   *  and feeds annotation-mode highlighting. */
-  panelsClicked: RepresentationPanelId[]
-  /** Which panel (if any) is currently driving annotation mode on the 3D
-   *  scene. null = no annotation overlay. */
+  /** Accumulated rotation in radians since the artifact opened. The
+   *  rotation gate satisfies at >= PI/2 (90 deg). */
+  rotationRad: number
+  /** Set of representation panels the user has clicked at least once.
+   *  Drives the panels-explored gate. */
+  panelsExplored: RepresentationPanelId[]
+  /** Which panel (if any) is currently driving isolation/treatment mode
+   *  on the 3D scene. null = default rendering. */
   activePanel: RepresentationPanelId | null
-  prediction1: ArtifactPrediction | null
-  prediction2: ArtifactPrediction | null
+  prediction1: ArtifactPrediction1 | null
+  prediction2: ArtifactPrediction2 | null
+  /** Photos the user attached to the trigger message. Rendered as
+   *  thumbnails in the Materials panel. */
+  userAttachments: ImageAttachment[]
 }
 
 export type ArcState = {
   beat: ArcBeat
   path: ArcPath | null
   conceptId: ConceptId | null
-  /** Which chat the arc is anchored to. */
   chatId: string | null
-  /** User message that fired the arc. */
   triggerMessageId: string | null
-  /** Assistant message that hosts the affordance buttons. */
   affordanceMessageId: string | null
-  /** Assistant message that hosts the <artifact/> tag. */
   artifactMessageId: string | null
   artifact: ArtifactState | null
 }
@@ -118,23 +133,31 @@ export type PrototypeState = {
   arc: ArcState
 }
 
+/**
+ * Default chip state. Lone pairs default ON — the whole artifact is about
+ * where they sit. Equatorial plane and bond angles default off; users
+ * toggle them on as the bubbles call attention to them, with the artifact
+ * driving the state forward at the right beats.
+ */
 const DEFAULT_CHIP_STATE: ChipState = {
   bonds: true,
-  lonePairs: false,
-  orbitals: false,
+  lonePairs: true,
+  equatorialPlane: false,
   angles: false,
 }
 
 const EMPTY_ARTIFACT: ArtifactState = {
   stage: 'opening',
   bubbleIndex: 0,
-  focus: 'lewis-spotlight',
-  activeMolecule: 'methane',
+  focus: 'materials',
+  activeMolecule: 'xef2',
   chipState: DEFAULT_CHIP_STATE,
-  panelsClicked: [],
+  rotationRad: 0,
+  panelsExplored: [],
   activePanel: null,
   prediction1: null,
   prediction2: null,
+  userAttachments: [],
 }
 
 const EMPTY_ARC: ArcState = {
@@ -152,12 +175,15 @@ const INITIAL_STATE: PrototypeState = {
   arc: EMPTY_ARC,
 }
 
-// Bumped from v1: prior Promise.all state in localStorage is incompatible
-// with the new chemistry state shape; force a fresh start for returning users.
-const STORAGE_KEY = 'education-labs:prototype-state:v2-chemistry'
-// Old keys to clean up on hydration so stale state from prior builds doesn't
-// linger.
-const STALE_STORAGE_KEYS = ['education-labs:prototype-state']
+// Bumped from v3: v4 polish pass changed the artifact state shape
+// (rotationRad replaces rotated, added panelsExplored). Force a fresh
+// start for returning users.
+const STORAGE_KEY = 'education-labs:prototype-state:v4-xef2-polish'
+const STALE_STORAGE_KEYS = [
+  'education-labs:prototype-state',
+  'education-labs:prototype-state:v2-chemistry',
+  'education-labs:prototype-state:v3-xef2',
+]
 
 export type FireArcInput = {
   conceptId: ConceptId
@@ -178,28 +204,22 @@ export type PrototypeStore = {
   chooseLearn: () => void
 
   // Artifact transitions --------------------------------------------------
-  /** Advance to the next bubble within the current stage. If there are no
-   *  more bubbles in this stage, transition to the next stage automatically.
-   *  Blocked when the active bubble has an unfulfilled gate. */
-  advanceArtifact: () => void
-  /** Step backward within the current stage. No cross-stage retreat — once
-   *  the user has predicted, they own that prediction. */
+  advanceArtifact: (opts?: { force?: boolean }) => void
   retreatArtifact: () => void
-  /** Record the first prediction and route to the matching misconception
-   *  branch. Sets stage to 'reveal-1'. */
-  recordPrediction1: (input: { optionId?: string; freeText?: string }) => void
-  /** Record the follow-up prediction. Sets stage to 'reveal-2'. */
-  recordPrediction2: (input: { optionId?: string; freeText?: string }) => void
-  /** User explicitly closes the artifact. Triggers the post-artifact
-   *  follow-up message. */
+  recordPrediction1: (input: { optionId?: Prediction1Key; freeText?: string }) => void
+  recordPrediction2: (input: { optionId?: Prediction2Key; freeText?: string }) => void
   closeArtifact: () => void
 
   // Artifact UI state -----------------------------------------------------
-  /** Toggle a chip on/off. Atoms are always on (not in ChipKey). */
   toggleChip: (key: ChipKey) => void
-  /** Click a representation panel. Enters annotation mode for that panel
-   *  and counts toward the Beat-3 explore gate. Click again to deactivate. */
+  /** Set a chip directly. Used by beats that drive a specific chip on/off. */
+  setChip: (key: ChipKey, value: boolean) => void
+  /** Click a representation panel — enters that panel's 3D treatment mode
+   *  and records the click against the panels-explored gate. */
   clickPanel: (id: RepresentationPanelId) => void
+  /** Accumulate rotation delta (radians). The rotation gate satisfies at
+   *  ROTATION_GATE_RAD. */
+  addRotation: (deltaRad: number) => void
 }
 
 export const PrototypeContext = createContext<PrototypeStore | null>(null)
@@ -212,7 +232,6 @@ function isConceptId(value: unknown): value is ConceptId {
 
 function loadFromStorage(): PrototypeState | null {
   if (typeof window === 'undefined') return null
-  // Best-effort cleanup of prior schema's keys.
   for (const k of STALE_STORAGE_KEYS) {
     try {
       window.localStorage.removeItem(k)
@@ -234,46 +253,102 @@ function loadFromStorage(): PrototypeState | null {
   }
 }
 
-function pickMisconceptionFromOption(optionId: string): MisconceptionKey {
-  const opt = PREDICTION_1.options.find((o) => o.id === optionId)
-  return opt?.misconceptionTag ?? 'unclassified'
-}
-
 /** Bubble sequence for the current stage of an artifact. */
 export function bubblesForStage(
   stage: ArtifactStage,
-  prediction1: ArtifactPrediction | null,
-  prediction2: ArtifactPrediction | null,
+  prediction1: ArtifactPrediction1 | null,
+  prediction2: ArtifactPrediction2 | null,
 ): Bubble[] {
   if (stage === 'opening') return OPENING_BUBBLES
   if (stage === 'predict-1' || stage === 'predict-2') return []
   if (stage === 'reveal-1') {
-    const key = prediction1?.misconceptionTag ?? 'unclassified'
-    return PATHS[key].reveal1
+    const key = prediction1?.key ?? 'unclassified'
+    return REVEAL_1_PATHS[key].reveal1
   }
   if (stage === 'reveal-2') {
-    const key = prediction1?.misconceptionTag ?? 'unclassified'
-    const followUpId = prediction2?.optionId ?? Object.keys(PATHS[key].reveal2)[0]
-    return PATHS[key].reveal2[followUpId] ?? []
+    const key = prediction2?.key ?? 'unclassified'
+    return REVEAL_2_PATHS[key]
   }
-  // closing
   return [CLOSING_BUBBLE]
 }
 
-export function followUpFor(
-  prediction1: ArtifactPrediction | null,
-): { framing: string; options: typeof PREDICTION_1.options } {
-  const key = prediction1?.misconceptionTag ?? 'unclassified'
-  return PATHS[key].followUp
-}
+/** 90 degrees of accumulated rotation satisfies the rotation gate. */
+export const ROTATION_GATE_RAD = Math.PI / 2
+
+/** The three "literacy" panels that the panels-explored gate counts against.
+ *  Materials is excluded — it opens a lightbox, not the 3D treatment. */
+export const LITERACY_PANELS: RepresentationPanelId[] = ['lewis', 'wedge', 'geometry']
 
 /** Whether the active bubble's gate (if any) is satisfied. */
 function isGateSatisfied(bubble: Bubble | undefined, artifact: ArtifactState): boolean {
   if (!bubble?.gate) return true
+  if (bubble.gate === 'rotation') return artifact.rotationRad >= ROTATION_GATE_RAD
   if (bubble.gate === 'panels-explored') {
-    return artifact.panelsClicked.length >= 2
+    return LITERACY_PANELS.every((id) => artifact.panelsExplored.includes(id))
   }
   return true
+}
+
+/** Public read-only helper that lets the UI render gate progress. */
+export function gateProgress(
+  bubble: Bubble | null | undefined,
+  artifact: ArtifactState,
+): { satisfied: boolean; current: number; total: number; label: string } | null {
+  if (!bubble?.gate) return null
+  if (bubble.gate === 'rotation') {
+    const total = ROTATION_GATE_RAD
+    const current = Math.min(artifact.rotationRad, total)
+    const pct = Math.round((current / total) * 100)
+    return {
+      satisfied: current >= total,
+      current,
+      total,
+      label: pct >= 100 ? 'Rotated' : `${pct}% rotated`,
+    }
+  }
+  if (bubble.gate === 'panels-explored') {
+    const total = LITERACY_PANELS.length
+    const current = artifact.panelsExplored.filter((id) => LITERACY_PANELS.includes(id)).length
+    return {
+      satisfied: current >= total,
+      current,
+      total,
+      label: `${current} of ${total} panels explored`,
+    }
+  }
+  return null
+}
+
+/** What cue, if any, the active bubble is broadcasting. */
+export function activeCue(artifact: ArtifactState | null): ElementCue | null {
+  if (!artifact) return null
+  const bubble = bubblesForStage(artifact.stage, artifact.prediction1, artifact.prediction2)[
+    artifact.bubbleIndex
+  ]
+  return bubble?.cue ?? null
+}
+
+/**
+ * Chip side-effects driven by focus state. Each focus transition can flip
+ * specific chips on. We don't flip them OFF here — once the user has seen
+ * them, they're allowed to stay on for the rest of the arc unless the user
+ * explicitly toggles them off.
+ */
+function chipUpdatesForFocus(focus: FocusState, current: ChipState): Partial<ChipState> {
+  switch (focus) {
+    case 'equatorial-reveal':
+      return { equatorialPlane: true, lonePairs: true }
+    case 'axial-bond-angle':
+      return { angles: true, lonePairs: true }
+    case 'closing':
+      return { lonePairs: true, angles: true }
+    default:
+      return current
+  }
+}
+
+function applyChipUpdates(state: ChipState, updates: Partial<ChipState>): ChipState {
+  return { ...state, ...updates }
 }
 
 export function PrototypeProvider({ children }: { children: ReactNode }) {
@@ -308,10 +383,6 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   }, [state, hydrated])
 
   const resetArc = useCallback(() => {
-    // Also clear storage synchronously. React 19 mounts child effects before
-    // parent's, so /new's resetArc fires before PrototypeProvider's
-    // loadFromStorage. Without clearing storage here, the load can reinstate
-    // stale state from a prior session.
     if (typeof window !== 'undefined') {
       try {
         window.localStorage.removeItem(STORAGE_KEY)
@@ -370,7 +441,24 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
 
     const chat = chatsRef.current.find((c) => c.id === arc.chatId)
     if (!chat) return
-    const apiMessages = chat.messages.map((m) => ({ role: m.role, content: m.text }))
+    const apiMessages = chat.messages.map((m) =>
+      m.attachments && m.attachments.length > 0
+        ? {
+            role: m.role,
+            content: [
+              ...m.attachments.map((a) => ({
+                type: 'image' as const,
+                source: {
+                  type: 'base64' as const,
+                  media_type: a.mediaType,
+                  data: a.data,
+                },
+              })),
+              ...(m.text.length > 0 ? [{ type: 'text' as const, text: m.text }] : []),
+            ],
+          }
+        : { role: m.role, content: m.text },
+    )
     streamCompletion(arc.chatId, {
       endpoint: '/api/wrapper-response',
       body: { conceptId: arc.conceptId, messages: apiMessages },
@@ -384,36 +472,42 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     if (!arc.chatId || !arc.conceptId) return
     const chatId = arc.chatId
 
+    // Snapshot the user's attachments from the trigger message. The
+    // artifact's "Your materials" panel renders these as thumbnails so
+    // the demo's grounded-in-real-materials story reads at a glance.
+    const chat = chatsRef.current.find((c) => c.id === chatId)
+    const triggerMsg = chat?.messages.find((m) => m.id === arc.triggerMessageId)
+    const fallbackTriggerMsg = chat?.messages.find((m) => m.role === 'user')
+    const userAttachments =
+      (triggerMsg ?? fallbackTriggerMsg)?.attachments ?? []
+
     setState((s) => ({
       ...s,
       arc: {
         ...s.arc,
         path: 'learning',
         beat: 'artifact-active',
-        artifact: { ...EMPTY_ARTIFACT },
+        artifact: { ...EMPTY_ARTIFACT, userAttachments },
       },
     }))
 
-    // Append the assistant message that hosts the <artifact/> tag. No
-    // pre-prose — the bubbles speak. The tag itself is the message.
     const id = appendAssistantMessage(chatId, '<artifact/>')
     setState((s) => ({ ...s, arc: { ...s.arc, artifactMessageId: id } }))
   }, [appendAssistantMessage])
 
-  const advanceArtifact = useCallback(() => {
+  const advanceArtifact = useCallback((opts?: { force?: boolean }) => {
     setState((s) => {
       const a = s.arc.artifact
       if (!a) return s
       const bubbles = bubblesForStage(a.stage, a.prediction1, a.prediction2)
       const currentBubble = bubbles[a.bubbleIndex]
 
-      // Gate check — if the current bubble has an unsatisfied gate, do not
-      // advance. The Artifact UI surfaces the gate state visually.
-      if (!isGateSatisfied(currentBubble, a)) return s
+      if (!opts?.force && !isGateSatisfied(currentBubble, a)) return s
 
       const nextIndex = a.bubbleIndex + 1
       if (nextIndex < bubbles.length) {
         const nextBubble = bubbles[nextIndex]
+        const nextFocus = nextBubble.focus ?? a.focus
         return {
           ...s,
           arc: {
@@ -421,13 +515,14 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
             artifact: {
               ...a,
               bubbleIndex: nextIndex,
-              focus: nextBubble.focus ?? a.focus,
+              focus: nextFocus,
               activeMolecule: nextBubble.molecule ?? a.activeMolecule,
+              chipState: applyChipUpdates(a.chipState, chipUpdatesForFocus(nextFocus, a.chipState)),
             },
           },
         }
       }
-      // End of current stage — transition.
+      // End of current stage — transition to the next.
       if (a.stage === 'opening') {
         return { ...s, arc: { ...s.arc, artifact: { ...a, stage: 'predict-1', bubbleIndex: 0 } } }
       }
@@ -436,6 +531,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       }
       if (a.stage === 'reveal-2') {
         const closing = bubblesForStage('closing', a.prediction1, a.prediction2)
+        const closingFocus = closing[0]?.focus ?? a.focus
         return {
           ...s,
           arc: {
@@ -445,13 +541,13 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
               ...a,
               stage: 'closing',
               bubbleIndex: 0,
-              focus: closing[0]?.focus ?? a.focus,
+              focus: closingFocus,
               activeMolecule: closing[0]?.molecule ?? a.activeMolecule,
+              chipState: applyChipUpdates(a.chipState, chipUpdatesForFocus(closingFocus, a.chipState)),
             },
           },
         }
       }
-      // closing — stay put. user clicks "close" explicitly.
       return s
     })
   }, [])
@@ -459,19 +555,53 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   const retreatArtifact = useCallback(() => {
     setState((s) => {
       const a = s.arc.artifact
-      if (!a || a.bubbleIndex === 0) return s
-      const bubbles = bubblesForStage(a.stage, a.prediction1, a.prediction2)
-      const prevIndex = a.bubbleIndex - 1
-      const prevBubble = bubbles[prevIndex]
+      if (!a) return s
+      // Within-stage retreat: just decrement.
+      if (a.bubbleIndex > 0) {
+        const bubbles = bubblesForStage(a.stage, a.prediction1, a.prediction2)
+        const prevIndex = a.bubbleIndex - 1
+        const prevBubble = bubbles[prevIndex]
+        return {
+          ...s,
+          arc: {
+            ...s.arc,
+            artifact: {
+              ...a,
+              bubbleIndex: prevIndex,
+              focus: prevBubble.focus ?? a.focus,
+              activeMolecule: prevBubble.molecule ?? a.activeMolecule,
+            },
+          },
+        }
+      }
+      // Cross-stage retreat: hop to the previous stage's last bubble.
+      // Predictions stay recorded — going back doesn't undo a prediction.
+      const prevStage: ArtifactStage | null =
+        a.stage === 'predict-1'
+          ? 'opening'
+          : a.stage === 'reveal-1'
+            ? 'predict-1'
+            : a.stage === 'predict-2'
+              ? 'reveal-1'
+              : a.stage === 'reveal-2'
+                ? 'predict-2'
+                : a.stage === 'closing'
+                  ? 'reveal-2'
+                  : null
+      if (!prevStage) return s
+      const prevBubbles = bubblesForStage(prevStage, a.prediction1, a.prediction2)
+      const prevIndex = Math.max(0, prevBubbles.length - 1)
+      const prevBubble = prevBubbles[prevIndex]
       return {
         ...s,
         arc: {
           ...s.arc,
           artifact: {
             ...a,
+            stage: prevStage,
             bubbleIndex: prevIndex,
-            focus: prevBubble.focus ?? a.focus,
-            activeMolecule: prevBubble.molecule ?? a.activeMolecule,
+            focus: prevBubble?.focus ?? a.focus,
+            activeMolecule: prevBubble?.molecule ?? a.activeMolecule,
           },
         },
       }
@@ -479,22 +609,23 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const recordPrediction1 = useCallback(
-    (input: { optionId?: string; freeText?: string }) => {
+    (input: { optionId?: Prediction1Key; freeText?: string }) => {
       setState((s) => {
         const a = s.arc.artifact
         if (!a) return s
-        const tag: MisconceptionKey = input.optionId
-          ? pickMisconceptionFromOption(input.optionId)
+        const key: Prediction1Key = input.optionId
+          ? input.optionId
           : input.freeText
-            ? classifyFreeText(input.freeText)
+            ? classifyPrediction1FreeText(input.freeText)
             : 'unclassified'
-        const prediction1: ArtifactPrediction = {
+        const prediction1: ArtifactPrediction1 = {
           optionId: input.optionId,
           freeText: input.freeText,
-          misconceptionTag: tag,
+          key,
         }
-        const reveal1 = PATHS[tag].reveal1
+        const reveal1 = REVEAL_1_PATHS[key].reveal1
         const first = reveal1[0]
+        const nextFocus = first?.focus ?? a.focus
         return {
           ...s,
           arc: {
@@ -504,8 +635,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
               prediction1,
               stage: 'reveal-1',
               bubbleIndex: 0,
-              focus: first?.focus ?? a.focus,
+              focus: nextFocus,
               activeMolecule: first?.molecule ?? a.activeMolecule,
+              chipState: applyChipUpdates(a.chipState, chipUpdatesForFocus(nextFocus, a.chipState)),
             },
           },
         }
@@ -515,23 +647,23 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   )
 
   const recordPrediction2 = useCallback(
-    (input: { optionId?: string; freeText?: string }) => {
+    (input: { optionId?: Prediction2Key; freeText?: string }) => {
       setState((s) => {
         const a = s.arc.artifact
         if (!a) return s
-        const followUp = followUpFor(a.prediction1)
-        const opt = input.optionId ? followUp.options.find((o) => o.id === input.optionId) : null
-        const tag: MisconceptionKey =
-          opt?.misconceptionTag ?? a.prediction1?.misconceptionTag ?? 'unclassified'
-        const prediction2: ArtifactPrediction = {
+        const key: Prediction2Key = input.optionId
+          ? input.optionId
+          : input.freeText
+            ? classifyPrediction2FreeText(input.freeText)
+            : 'unclassified'
+        const prediction2: ArtifactPrediction2 = {
           optionId: input.optionId,
           freeText: input.freeText,
-          misconceptionTag: tag,
+          key,
         }
-        const key = a.prediction1?.misconceptionTag ?? 'unclassified'
-        const followUpId = input.optionId ?? Object.keys(PATHS[key].reveal2)[0]
-        const reveal2 = PATHS[key].reveal2[followUpId] ?? []
+        const reveal2 = REVEAL_2_PATHS[key]
         const first = reveal2[0]
+        const nextFocus = first?.focus ?? a.focus
         return {
           ...s,
           arc: {
@@ -541,8 +673,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
               prediction2,
               stage: 'reveal-2',
               bubbleIndex: 0,
-              focus: first?.focus ?? a.focus,
+              focus: nextFocus,
               activeMolecule: first?.molecule ?? a.activeMolecule,
+              chipState: applyChipUpdates(a.chipState, chipUpdatesForFocus(nextFocus, a.chipState)),
             },
           },
         }
@@ -562,17 +695,32 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       arc: { ...s.arc, beat: 'wrapper-followup' },
     }))
 
-    // Stream the post-artifact follow-up message. Reuses /api/wrapper-response
-    // with afterLearning=true so the prompt skips re-explaining the concept
-    // and instead offers to look at sp²/sp hybridization or another molecule.
-    //
-    // Pass ONLY the user's original trigger message — the artifact lived
-    // outside the regular chat history and the system prompt already carries
-    // the context the model needs.
+    // Stream the post-artifact follow-up using only the original trigger
+    // message — the artifact lived outside chat history and the system
+    // prompt already carries the spatial context.
     const chat = chatsRef.current.find((c) => c.id === chatId)
     const firstUserMessage = chat?.messages.find((m) => m.role === 'user')
     const apiMessages = firstUserMessage
-      ? [{ role: 'user' as const, content: firstUserMessage.text }]
+      ? [
+          firstUserMessage.attachments && firstUserMessage.attachments.length > 0
+            ? {
+                role: 'user' as const,
+                content: [
+                  ...firstUserMessage.attachments.map((a) => ({
+                    type: 'image' as const,
+                    source: {
+                      type: 'base64' as const,
+                      media_type: a.mediaType,
+                      data: a.data,
+                    },
+                  })),
+                  ...(firstUserMessage.text.length > 0
+                    ? [{ type: 'text' as const, text: firstUserMessage.text }]
+                    : []),
+                ],
+              }
+            : { role: 'user' as const, content: firstUserMessage.text },
+        ]
       : []
     streamCompletion(chatId, {
       endpoint: '/api/wrapper-response',
@@ -590,10 +738,21 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         ...s,
         arc: {
           ...s.arc,
-          artifact: {
-            ...a,
-            chipState: { ...a.chipState, [key]: !a.chipState[key] },
-          },
+          artifact: { ...a, chipState: { ...a.chipState, [key]: !a.chipState[key] } },
+        },
+      }
+    })
+  }, [])
+
+  const setChip = useCallback((key: ChipKey, value: boolean) => {
+    setState((s) => {
+      const a = s.arc.artifact
+      if (!a) return s
+      return {
+        ...s,
+        arc: {
+          ...s.arc,
+          artifact: { ...a, chipState: { ...a.chipState, [key]: value } },
         },
       }
     })
@@ -603,15 +762,28 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     setState((s) => {
       const a = s.arc.artifact
       if (!a) return s
-      // Track unique clicks (so the gate registers exploration, not repeat
-      // clicks on the same panel).
-      const already = a.panelsClicked.includes(id)
-      const panelsClicked = already ? a.panelsClicked : [...a.panelsClicked, id]
-      // Toggle annotation mode: clicking the active panel deactivates it.
       const activePanel = a.activePanel === id ? null : id
+      const panelsExplored = a.panelsExplored.includes(id)
+        ? a.panelsExplored
+        : [...a.panelsExplored, id]
       return {
         ...s,
-        arc: { ...s.arc, artifact: { ...a, panelsClicked, activePanel } },
+        arc: { ...s.arc, artifact: { ...a, activePanel, panelsExplored } },
+      }
+    })
+  }, [])
+
+  const addRotation = useCallback((deltaRad: number) => {
+    if (!Number.isFinite(deltaRad) || deltaRad <= 0) return
+    setState((s) => {
+      const a = s.arc.artifact
+      if (!a) return s
+      if (a.rotationRad >= ROTATION_GATE_RAD) return s
+      const next = Math.min(a.rotationRad + deltaRad, ROTATION_GATE_RAD)
+      if (next === a.rotationRad) return s
+      return {
+        ...s,
+        arc: { ...s.arc, artifact: { ...a, rotationRad: next } },
       }
     })
   }, [])
@@ -629,7 +801,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       recordPrediction2,
       closeArtifact,
       toggleChip,
+      setChip,
       clickPanel,
+      addRotation,
     }),
     [
       state,
@@ -643,7 +817,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       recordPrediction2,
       closeArtifact,
       toggleChip,
+      setChip,
       clickPanel,
+      addRotation,
     ],
   )
 
@@ -655,3 +831,5 @@ export function usePrototypeStore() {
   if (!ctx) throw new Error('usePrototypeStore must be used within PrototypeProvider')
   return ctx
 }
+
+export { PREDICTION_1, PREDICTION_2 }

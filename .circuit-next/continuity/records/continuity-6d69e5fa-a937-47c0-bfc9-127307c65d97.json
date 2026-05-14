@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "record_id": "continuity-6d69e5fa-a937-47c0-bfc9-127307c65d97",
+  "project_root": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main",
+  "created_at": "2026-05-14T19:58:14.908Z",
+  "git": {
+    "cwd": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main"
+  },
+  "narrative": {
+    "goal": "Continue v3 XeF2 artifact polish; iterate via Agentation feedback in a fresh session that has the MCP tools loaded from startup",
+    "next": "In fresh session: confirm Agentation MCP tools are loaded, run agentation_watch_annotations to process any new annotations the user pins in the browser. Dev server is running on localhost:3000.",
+    "state_markdown": "- v3 polish pass shipped: header simplified (title + References/Summary/Close icon cluster, dropped step dots + EXPLAINER eyebrow), right-pane state machine (bubble / predict / reveal / closing), dramatic panel treatments (Lewis flatten via low-FOV + desaturation, wedge-dash 3D bond rendering, geometry equatorial disc + angle annotation + shape label), guided-interaction beat pattern (panels-explored gate on Beat 3, rotation >=90 degrees gate on Beat 5, with N-of-3 progress text + skip-after-10s link), bubble-element cues (panels / viewport / contextual toggles pulse softly), References + Summary overlays openable from header (Summary disabled until past predict-1).\n- Lone-pairs persistent chip removed per user feedback; Bond angles still appears as contextual overlay on viewport bottom-left during angle beats.\n- Artifact message expands to 1024px width via MessageRow wrapper in src/app/chat/[chatId]/page.tsx; other messages stay at 768px.\n- Agentation v3.0.2 installed and wired into src/app/layout.tsx with NODE_ENV=development gate; toolbar visible bottom-right of dev pages.\n- Agentation MCP server registered for this project (local scope) via claude mcp add; mcp tools only get loaded at session startup so we need a fresh session.\n- 17 stale annotations (from /m/sf/* paddock prototype) cleared via mcp__agentation__agentation_resolve.\n- Build green; full arc smoke-tested through panels-explored gate. Lewis flattening works (head-on view, FOV 8, grayscale 0.6), wedge-dash works (dashes for bonds going away from viewer), geometry overlays equatorial disc + 180 degree angle annotation.\n- Dev server running on localhost:3000 in background.\n- Storage key bumped to v4-xef2-polish; prior session chat state invalidated cleanly.",
+    "debt_markdown": "- Right pane has tall empty space on bubble stages, especially during opening beats — visual polish opportunity.\n- Dev server currently running in background; fresh session will need to either reuse it or restart.\n- /test-molecule dev page kept as utility; decision pending on whether to strip before merge.\n- xef2-axial-strain chart label says \"Strained\" — accurate but blunt; could soften further.\n- ClF3 axial-axial angle rendered as 180 idealized in 3D; real value ~87.5 axial-eq. Geometry card notes real angles; 3D scene does not bend.\n- focus=lewis-isolation on Beat 2 does not auto-set activePanel=lewis; user must click panel for visual isolation. Auto-isolation wiring deferred.\n- Active vs past bubble visual contrast no longer relevant after right-pane redesign (single bubble at a time)."
+  },
+  "continuity_kind": "standalone",
+  "resume_contract": {
+    "mode": "resume_standalone",
+    "auto_resume": false,
+    "requires_explicit_resume": true
+  }
+}

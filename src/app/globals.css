@@ -20,8 +20,8 @@
   --color-text-secondary: rgb(61 61 58);
   --color-text-tertiary: rgb(115 114 108);
 
-  --color-accent: rgb(217 119 87);
-  --color-accent-strong: rgb(198 97 63);
+  --color-accent: #008bff;
+  --color-accent-strong: #0072d6;
   --color-danger: rgb(153 27 27);
 
   --color-border-subtle: rgb(31 30 29 / 0.15);
@@ -61,6 +61,12 @@
   --sidebar-width: 288px;
   --sidebar-width-collapsed: 48px;
   --header-height: 56px;
+  /* Approximate height of the sticky bottom composer container (InputBar +
+     its wrapper padding + the disclaimer line). Used by the inline artifact
+     to cap its max-height so it always fits in the visible chat area.
+     Accurate when the InputBar is one row tall; slightly off when the user
+     has typed multi-line content. */
+  --composer-height: 144px;
   --content-max-width: 768px;
   --input-max-width: 672px;
   --input-max-width-lg: 752px;
@@ -89,4 +95,39 @@ textarea {
 }
 .scroll-area::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* Scrollbar-less utility — for horizontal carousels where the scroll affordance
+   is provided by an edge gradient mask, not a visible bar. */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+/* ============================================================
+   Artifact animations — bubble fades, cue pulses, state cross-fades
+   ============================================================ */
+@keyframes cuePulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.65;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}
+
+@keyframes artifactStateIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

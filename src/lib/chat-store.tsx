@@ -9,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import type { Chat, Config, Message } from './types'
+import type { Chat, Config, ImageAttachment, Message } from './types'
 import { DEFAULT_CONFIG, SEED_CHATS } from './seed'
 import {
   DEFAULT_MODEL,
@@ -61,8 +61,8 @@ type ChatStore = {
   streamingChatId: string | null
   /** Most recent completion meta. PrototypeProvider observes this. */
   lastCompletion: LastCompletion | null
-  createChat: (text: string) => string
-  sendReply: (chatId: string, text: string) => void
+  createChat: (text: string, attachments?: ImageAttachment[]) => string
+  sendReply: (chatId: string, text: string, attachments?: ImageAttachment[]) => void
   /**
    * Append a static (non-streamed) assistant message to an existing chat.
    * Returns the new message id. Used by PrototypeProvider for stubbed beats
@@ -89,11 +89,49 @@ const STORAGE_KEY = 'education-labs:chats'
 
 function makeTitle(text: string) {
   const first = text.trim().split('\n')[0]
+  if (first.length === 0) return 'New conversation'
   return first.length > 40 ? first.slice(0, 40) + '…' : first
 }
 
 function nextId(prefix: 'c' | 'm') {
   return `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+}
+
+/**
+ * Encode a user message for the Anthropic API. Text-only stays as a plain
+ * string for the SDK's terse path; if attachments are present, switch to the
+ * content-block array shape with one image block per attachment.
+ */
+function encodeMessageForApi(m: Message): {
+  role: 'user' | 'assistant'
+  content:
+    | string
+    | Array<
+        | { type: 'text'; text: string }
+        | {
+            type: 'image'
+            source: { type: 'base64'; media_type: string; data: string }
+          }
+      >
+} {
+  if (m.role !== 'user' || !m.attachments || m.attachments.length === 0) {
+    return { role: m.role, content: m.text }
+  }
+  const blocks: Array<
+    | { type: 'text'; text: string }
+    | {
+        type: 'image'
+        source: { type: 'base64'; media_type: string; data: string }
+      }
+  > = []
+  for (const att of m.attachments) {
+    blocks.push({
+      type: 'image',
+      source: { type: 'base64', media_type: att.mediaType, data: att.data },
+    })
+  }
+  if (m.text.length > 0) blocks.push({ type: 'text', text: m.text })
+  return { role: m.role, content: blocks }
 }
 
 export function ChatProvider({ children }: { children: ReactNode }) {
@@ -217,7 +255,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           endpoint: '/api/chat',
           body: {
             model: model.id,
-            messages: history.map((m) => ({ role: m.role, content: m.text })),
+            messages: history.map(encodeMessageForApi),
           },
         },
         { triggerMessageId },
@@ -246,9 +284,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   )
 
   const createChat = useCallback(
-    (text: string) => {
+    (text: string, attachments?: ImageAttachment[]) => {
       const id = nextId('c')
-      const userMsg: Message = { id: nextId('m'), role: 'user', text }
+      const userMsg: Message = {
+        id: nextId('m'),
+        role: 'user',
+        text,
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      }
       const chat: Chat = { id, title: makeTitle(text), messages: [userMsg] }
       setChats((cs) => [chat, ...cs])
       runChatCompletion(id, [userMsg])
@@ -269,8 +312,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   )
 
   const sendReply = useCallback(
-    (chatId: string, text: string) => {
-      const userMsg: Message = { id: nextId('m'), role: 'user', text }
+    (chatId: string, text: string, attachments?: ImageAttachment[]) => {
+      const userMsg: Message = {
+        id: nextId('m'),
+        role: 'user',
+        text,
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      }
       let nextHistory: Message[] = []
 
       setChats((cs) =>

@@ -1,75 +1,96 @@
 'use client'
 
-import { Lock } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
-import { usePrototypeStore, type ChipKey } from '@/lib/prototype-store'
+import { activeCue, usePrototypeStore } from '@/lib/prototype-store'
 
 /**
- * Toggle chips above the 3D viewport. Each chip flips a bit in
- * `arc.artifact.chipState`; MoleculeScene reads chipState and re-renders the
- * appropriate primitives (bonds, lone-pair ellipsoids, orbital lobes,
- * bond-angle arc + degree label).
+ * Viewport controls. The v4 polish removed the always-on chip row in favor
+ * of contextual controls that mount only when a beat actually references
+ * them. Currently:
  *
- * Atoms is locked on — it's always rendered. We surface it as a chip anyway
- * so the user can see the full set of "what you can show" and learn what
- * each toggle means.
+ *   - Bond angles — appears when focus === 'axial-bond-angle' or 'closing'.
+ *
+ * Lone pairs default ON in chipState and stay on for the entire arc; no
+ * toggle is shown because every beat depends on seeing them. If no
+ * contextual control is currently relevant, this component renders nothing
+ * and the row above the viewport collapses cleanly.
  */
-
-type ChipMeta = {
-  key: 'atoms' | ChipKey
-  label: string
-  locked?: boolean
-}
-
-const CHIPS: ChipMeta[] = [
-  { key: 'atoms', label: 'Atoms', locked: true },
-  { key: 'bonds', label: 'Bonds' },
-  { key: 'lonePairs', label: 'Lone pairs' },
-  { key: 'orbitals', label: 'Orbital lobes' },
-  { key: 'angles', label: 'Bond angles' },
-]
-
-export function ToggleChips() {
+export function ViewportControls() {
   const { state, toggleChip } = usePrototypeStore()
-  const chipState = state.arc.artifact?.chipState
-  if (!chipState) return null
+  const artifact = state.arc.artifact
+  if (!artifact) return null
+
+  const cue = activeCue(artifact)
+  const focus = artifact.focus
+  const angleContext =
+    focus === 'axial-bond-angle' || focus === 'closing' || artifact.chipState.angles
+
+  if (!angleContext) return null
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {CHIPS.map((chip) => {
-        const on = chip.locked ? true : chipState[chip.key as ChipKey]
-        const handleClick = () => {
-          if (chip.locked) return
-          toggleChip(chip.key as ChipKey)
-        }
-        return (
-          <button
-            key={chip.key}
-            type="button"
-            onClick={handleClick}
-            disabled={chip.locked}
-            aria-pressed={chip.locked ? undefined : on}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px]',
-              'transition-colors',
-              on
-                ? 'border-accent/40 bg-accent/10 text-accent-strong'
-                : 'border-border-subtle bg-page text-text-tertiary hover:bg-state-hover hover:text-text-secondary',
-              chip.locked && 'cursor-default opacity-80 hover:bg-accent/10 hover:text-accent-strong',
-            )}
-          >
-            <span
-              aria-hidden
-              className={cn(
-                'inline-block size-1.5 rounded-full transition-colors',
-                on ? 'bg-accent-strong' : 'bg-text-tertiary/40',
-              )}
-            />
-            <span>{chip.label}</span>
-            {chip.locked && <Lock className="ml-0.5 size-2.5 opacity-60" />}
-          </button>
-        )
-      })}
+    <div className="flex flex-wrap items-center gap-2">
+      <ControlToggle
+        label="Bond angles"
+        on={artifact.chipState.angles}
+        cued={cue === 'bond-angles-toggle'}
+        onToggle={() => toggleChip('angles')}
+      />
     </div>
+  )
+}
+
+function ControlToggle({
+  label,
+  on,
+  cued,
+  onToggle,
+}: {
+  label: string
+  on: boolean
+  cued: boolean
+  onToggle: () => void
+}) {
+  // Once the user interacts with a cued control, suppress the pulse even
+  // if the cue would still match.
+  const [tapped, setTapped] = useState(false)
+  useEffect(() => {
+    if (!cued) setTapped(false)
+  }, [cued])
+
+  const showCue = cued && !tapped
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        setTapped(true)
+        onToggle()
+      }}
+      aria-pressed={on}
+      className={cn(
+        'group relative inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px]',
+        'transition-colors',
+        on
+          ? 'border-accent/40 bg-accent/10 text-accent-strong'
+          : 'border-border-subtle bg-page text-text-tertiary hover:bg-state-hover hover:text-text-secondary',
+        showCue && 'shadow-[0_0_0_3px_rgba(0,139,255,0.18)]',
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          'inline-block size-1.5 rounded-full transition-colors',
+          on ? 'bg-accent-strong' : 'bg-text-tertiary/40',
+        )}
+      />
+      <span>{label}</span>
+      {showCue && (
+        <span
+          aria-hidden
+          className="border-accent/40 bg-accent/15 absolute -inset-0.5 -z-10 animate-[cuePulse_1600ms_ease-in-out_infinite] rounded-full border"
+        />
+      )}
+    </button>
   )
 }

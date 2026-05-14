@@ -1,107 +1,165 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { usePrototypeStore, type RepresentationPanelId } from '@/lib/prototype-store'
-import type { Molecule } from '@/lib/artifact-script'
+import { activeCue, usePrototypeStore, type RepresentationPanelId } from '@/lib/prototype-store'
+import type { ElementCue, Molecule } from '@/lib/artifact-script'
+import type { ImageAttachment } from '@/lib/types'
 
 /**
- * The row of clickable representation panels beneath the 3D viewport.
+ * The row of compact representation cards above the 3D viewport edge.
  *
- * Each panel renders the current `activeMolecule` in a different 2D
- * notation. Clicking a panel:
- *   1. Counts toward the Beat-3 explore gate (panelsClicked is the spine).
- *   2. Enters "annotation mode" on the 3D scene: parts that representation
- *      omits fade out, parts it captures stay prominent. The 3D viewport
- *      reads `activePanel` and applies the fade.
+ * Three cards:
+ *   - Lewis structure (3D viewport flattens to a desaturated 2D-style view)
+ *   - Wedge-and-dash (3D viewport re-renders bonds as wedges/dashes)
+ *   - Geometry chart (3D viewport foregrounds shape name, angles)
  *
- * The point of the mechanic, said plainly, is REPRESENTATION LITERACY:
- * each notation captures some aspects of the molecule and omits others.
- * Learning to read them as lenses (not as rules to memorize) is the move.
+ * The card is the affordance, the 3D treatment is the lesson. Cards keep the
+ * same shape between inactive and active states — only colour and the
+ * accent border distinguish them. If the row overflows horizontally the
+ * container scrolls and the cropped side fades out with a linear-gradient
+ * mask, hinting that more content is in that direction.
+ *
+ * A bubble can broadcast a cue ('panel-lewis', 'panels-row', …) which pulses
+ * the matching card(s) softly until the user clicks them.
  */
 
+type LiteracyPanelId = Exclude<RepresentationPanelId, 'materials'>
+
 type PanelMeta = {
-  id: RepresentationPanelId
+  id: LiteracyPanelId
   label: string
-  /** Brief description of what this representation captures — shown as a
-   *  sub-line in the panel and surfaced in the 3D scene's annotation overlay. */
-  tellsYou: string
-  /** What this representation omits. */
-  omits: string
-  /** Renders the schematic for the given molecule. */
-  Render: (props: { molecule: Molecule }) => ReactNode
 }
 
 const PANELS: PanelMeta[] = [
-  {
-    id: 'lewis',
-    label: 'Lewis structure',
-    tellsYou: 'Electron bookkeeping — bonded pairs and lone pairs.',
-    omits: '3D geometry. Bond angles.',
-    Render: LewisDiagram,
-  },
-  {
-    id: 'wedge',
-    label: 'Wedge-and-dash',
-    tellsYou: 'Bond directions: in plane, toward you (wedge), behind (dash).',
-    omits: 'The shape of lone-pair electron density.',
-    Render: WedgeDashDiagram,
-  },
-  {
-    id: 'geometry',
-    label: 'Geometry chart',
-    tellsYou: 'Shape name. Bond angle. Electron-domain geometry.',
-    omits: 'Visual structure. Where the lone pairs sit.',
-    Render: GeometryCard,
-  },
+  { id: 'lewis', label: 'Lewis' },
+  { id: 'wedge', label: 'Wedge-and-dash' },
+  { id: 'geometry', label: 'Geometry chart' },
 ]
+
+/**
+ * The 2D diagrams that used to live inside each card. They now render in the
+ * right pane next to the bubble so the user sees the literal 2D structure
+ * alongside the explanation, while the 3D viewport carries the corresponding
+ * treatment. Exported so Artifact can pick the right one based on the active
+ * panel. `expanded` swaps to a larger render so the diagram fills the whole
+ * right-pane content area.
+ */
+export function PanelDiagram({
+  panel,
+  molecule,
+  expanded = false,
+}: {
+  panel: LiteracyPanelId
+  molecule: Molecule
+  expanded?: boolean
+}) {
+  if (panel === 'lewis') return <LewisDiagram molecule={molecule} expanded={expanded} />
+  if (panel === 'wedge') return <WedgeDashDiagram molecule={molecule} expanded={expanded} />
+  return <GeometryCard molecule={molecule} expanded={expanded} />
+}
+
+function cueMatchesPanel(cue: ElementCue | null, panel: LiteracyPanelId): boolean {
+  if (!cue) return false
+  if (cue === 'panels-row') return true
+  if (cue === 'panel-lewis') return panel === 'lewis'
+  if (cue === 'panel-wedge') return panel === 'wedge'
+  if (cue === 'panel-geometry') return panel === 'geometry'
+  return false
+}
+
+const FADE_PX = 28
 
 export function RepresentationPanels() {
   const { state, clickPanel } = usePrototypeStore()
   const artifact = state.arc.artifact
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [leftFade, setLeftFade] = useState(false)
+  const [rightFade, setRightFade] = useState(false)
+
+  const updateFades = useCallback(() => {
+    const el = containerRef.current
+    if (!el) return
+    setLeftFade(el.scrollLeft > 2)
+    setRightFade(el.scrollLeft + el.clientWidth < el.scrollWidth - 2)
+  }, [])
+
+  useEffect(() => {
+    updateFades()
+    const el = containerRef.current
+    if (!el) return
+    el.addEventListener('scroll', updateFades, { passive: true })
+    window.addEventListener('resize', updateFades)
+    const ro = new ResizeObserver(updateFades)
+    ro.observe(el)
+    return () => {
+      el.removeEventListener('scroll', updateFades)
+      window.removeEventListener('resize', updateFades)
+      ro.disconnect()
+    }
+  }, [updateFades])
+
   if (!artifact) return null
+  const cue = activeCue(artifact)
+
+  // Single linear-gradient mask covers both sides. When a side isn't
+  // cropped we anchor that side at fully opaque so cards don't get clipped.
+  const stops: string[] = []
+  stops.push(leftFade ? 'transparent 0' : 'black 0')
+  if (leftFade) stops.push(`black ${FADE_PX}px`)
+  if (rightFade) stops.push(`black calc(100% - ${FADE_PX}px)`)
+  stops.push(rightFade ? 'transparent 100%' : 'black 100%')
+  const maskImage = `linear-gradient(to right, ${stops.join(', ')})`
 
   return (
-    <div className="grid grid-cols-3 gap-2">
+    <div
+      ref={containerRef}
+      // py-2 reserves room for the cards' box-shadows (and the cue
+      // pulse outline shadow) inside the scrollable element — setting
+      // overflow-x to auto clips both axes, so without vertical padding the
+      // shadows would be sliced off above and below each card.
+      className="no-scrollbar flex gap-2 overflow-x-auto py-2"
+      style={{ maskImage, WebkitMaskImage: maskImage }}
+    >
       {PANELS.map((p) => {
         const active = artifact.activePanel === p.id
-        const explored = artifact.panelsClicked.includes(p.id)
+        const cued = cueMatchesPanel(cue, p.id)
+        // Once the user has clicked a cued card, suppress its pulse even
+        // if the cue is still broadcasting (e.g. panels-row still wants to
+        // highlight the others).
+        const explored = artifact.panelsExplored.includes(p.id)
+        const showCue = cued && !explored && !active
         return (
           <button
             key={p.id}
             type="button"
             onClick={() => clickPanel(p.id)}
             className={cn(
-              'group relative flex flex-col gap-1.5 overflow-hidden rounded-md border p-2.5 text-left',
-              'transition-colors',
+              'group relative inline-flex shrink-0 items-center justify-center overflow-hidden',
+              'rounded-full border px-3.5 py-1.5 backdrop-blur-md transition-colors',
               active
-                ? 'border-accent/50 bg-accent/8 shadow-sm'
-                : 'border-border-subtle bg-page hover:border-border-soft hover:bg-state-hover',
+                ? 'border-accent/55 bg-accent/15 shadow-md'
+                : 'border-border-subtle bg-surface/80 shadow-sm hover:border-border-soft hover:bg-surface/95',
+              showCue && 'shadow-[0_0_0_3px_rgba(0,139,255,0.18)]',
             )}
             aria-pressed={active}
+            aria-label={p.label}
           >
-            <div className="flex items-center justify-between gap-2">
-              <span
-                className={cn(
-                  'text-[10px] font-medium uppercase tracking-wide',
-                  active ? 'text-accent-strong' : 'text-text-tertiary',
-                )}
-              >
-                {p.label}
-              </span>
-              {explored && !active && (
-                <span
-                  aria-hidden
-                  className="bg-text-tertiary/40 inline-block size-1 rounded-full"
-                />
+            <span
+              className={cn(
+                'whitespace-nowrap text-[12px] font-medium',
+                active ? 'text-accent-strong' : 'text-text-secondary',
               )}
-            </div>
-            <div className="flex h-[88px] items-center justify-center">
-              <p.Render molecule={artifact.activeMolecule} />
-            </div>
-            <div className="text-text-tertiary text-[10px] leading-snug">
-              {active ? p.tellsYou : ' '}
-            </div>
+            >
+              {p.label}
+            </span>
+            {showCue && (
+              <span
+                aria-hidden
+                className="border-accent/40 bg-accent/8 pointer-events-none absolute -inset-0.5 -z-10 animate-[cuePulse_1600ms_ease-in-out_infinite] rounded-full border"
+              />
+            )}
           </button>
         )
       })}
@@ -110,20 +168,73 @@ export function RepresentationPanels() {
 }
 
 // ---------------------------------------------------------------------------
-// Lewis dot structures (schematic SVGs)
+// Materials lightbox — full-screen view of Naomi's attached photos. Triggered
+// from the stacked-thumbnail control in the artifact header.
 // ---------------------------------------------------------------------------
 
-const LEWIS_DOT_R = 1.8
+export function MaterialsLightbox({
+  attachments,
+  onClose,
+}: {
+  attachments: ImageAttachment[]
+  onClose: () => void
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-8"
+      onClick={onClose}
+      role="dialog"
+      aria-label="Your materials"
+    >
+      <div
+        className="bg-page relative max-h-[90vh] w-full max-w-3xl overflow-auto rounded-lg p-4 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h4 className="text-text-primary font-serif text-base">Your materials</h4>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="text-text-tertiary hover:bg-state-hover hover:text-text-secondary inline-flex size-7 items-center justify-center rounded-full transition-colors"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          {attachments.map((a) => (
+            <figure key={a.id} className="flex flex-col gap-2">
+              <img
+                src={`data:${a.mediaType};base64,${a.data}`}
+                alt={a.name}
+                className="border-border-subtle max-h-[70vh] w-full rounded-md border object-contain"
+              />
+              <figcaption className="text-text-tertiary text-xs">{a.name}</figcaption>
+            </figure>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Lewis dot structures (schematic SVGs) — XeF2 and ClF3.
+// ---------------------------------------------------------------------------
+
+const LEWIS_DOT_R = 1.6
 const LEWIS_STROKE = '#3a3833'
 const LEWIS_DIM = '#6b665e'
 
-function LewisDiagram({ molecule }: { molecule: Molecule }) {
+function LewisDiagram({ molecule, expanded = false }: { molecule: Molecule; expanded?: boolean }) {
   return (
-    <svg viewBox="0 0 100 80" className="size-full text-text-primary">
-      {molecule === 'methane' && <LewisMethane />}
-      {molecule === 'ammonium' && <LewisAmmonium />}
-      {molecule === 'ammonia' && <LewisAmmonia />}
-      {molecule === 'water' && <LewisWater />}
+    <svg
+      viewBox="0 0 100 80"
+      preserveAspectRatio="xMidYMid meet"
+      className={cn('text-text-primary', expanded ? 'h-auto w-full max-w-[300px]' : 'h-[88px] w-[110px]')}
+    >
+      {(molecule === 'xef2' || molecule === 'xef2-axial-strain') && <LewisXef2 />}
+      {molecule === 'clf3' && <LewisClf3 />}
     </svg>
   )
 }
@@ -146,8 +257,6 @@ function AtomLabel({ x, y, label }: { x: number; y: number; label: string }) {
 }
 
 function Bond({ x1, y1, x2, y2 }: { x1: number; y1: number; x2: number; y2: number }) {
-  // Pull the endpoints back from the atom labels so the line doesn't run
-  // through the letters.
   const dx = x2 - x1
   const dy = y2 - y1
   const len = Math.hypot(dx, dy)
@@ -167,272 +276,173 @@ function Bond({ x1, y1, x2, y2 }: { x1: number; y1: number; x2: number; y2: numb
   )
 }
 
-function LewisMethane() {
-  // C in the center, 4 H's at cardinal positions, bonds between.
+/** F atom with three lone pairs (top, sides — schematic). */
+function FluorineWithLonePairs({ cx, cy }: { cx: number; cy: number }) {
   return (
     <g>
-      <Bond x1={50} y1={40} x2={50} y2={14} />
-      <Bond x1={50} y1={40} x2={78} y2={40} />
-      <Bond x1={50} y1={40} x2={50} y2={66} />
-      <Bond x1={50} y1={40} x2={22} y2={40} />
-      <AtomLabel x={50} y={40} label="C" />
-      <AtomLabel x={50} y={10} label="H" />
-      <AtomLabel x={82} y={40} label="H" />
-      <AtomLabel x={50} y={70} label="H" />
-      <AtomLabel x={18} y={40} label="H" />
+      <AtomLabel x={cx} y={cy} label="F" />
+      {/* three small lone-pair dots clusters around the F */}
+      <circle cx={cx - 5} cy={cy} r={LEWIS_DOT_R / 1.4} fill={LEWIS_STROKE} />
+      <circle cx={cx - 5} cy={cy + 3} r={LEWIS_DOT_R / 1.4} fill={LEWIS_STROKE} />
+      <circle cx={cx + 5} cy={cy} r={LEWIS_DOT_R / 1.4} fill={LEWIS_STROKE} />
+      <circle cx={cx + 5} cy={cy + 3} r={LEWIS_DOT_R / 1.4} fill={LEWIS_STROKE} />
     </g>
   )
 }
 
-function LewisAmmonium() {
+function LewisXef2() {
   return (
     <g>
-      <Bond x1={50} y1={40} x2={50} y2={14} />
-      <Bond x1={50} y1={40} x2={78} y2={40} />
-      <Bond x1={50} y1={40} x2={50} y2={66} />
-      <Bond x1={50} y1={40} x2={22} y2={40} />
-      <AtomLabel x={50} y={40} label="N" />
-      <AtomLabel x={50} y={10} label="H" />
-      <AtomLabel x={82} y={40} label="H" />
-      <AtomLabel x={50} y={70} label="H" />
-      <AtomLabel x={18} y={40} label="H" />
-      <text
-        x={68}
-        y={22}
-        fontSize="9"
-        fontFamily="ui-sans-serif, system-ui, sans-serif"
-        fontWeight={600}
-        fill={LEWIS_STROKE}
-      >
-        +
-      </text>
-    </g>
-  )
-}
-
-function LewisAmmonia() {
-  // N in center, lone pair on top (two dots), three H below in a fan.
-  return (
-    <g>
-      {/* Lone pair pair-of-dots above N */}
-      <circle cx={47} cy={20} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={53} cy={20} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      {/* Lone pairs on Xe (left, right, top) */}
+      <circle cx={32} cy={37} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={32} cy={43} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={68} cy={37} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={68} cy={43} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={47} cy={28} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={53} cy={28} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
       {/* Bonds */}
-      <Bond x1={50} y1={40} x2={22} y2={68} />
-      <Bond x1={50} y1={40} x2={50} y2={70} />
-      <Bond x1={50} y1={40} x2={78} y2={68} />
-      <AtomLabel x={50} y={40} label="N" />
-      <AtomLabel x={18} y={70} label="H" />
-      <AtomLabel x={50} y={74} label="H" />
-      <AtomLabel x={82} y={70} label="H" />
+      <Bond x1={50} y1={40} x2={50} y2={14} />
+      <Bond x1={50} y1={40} x2={50} y2={66} />
+      <AtomLabel x={50} y={40} label="Xe" />
+      <FluorineWithLonePairs cx={50} cy={10} />
+      <FluorineWithLonePairs cx={50} cy={70} />
     </g>
   )
 }
 
-function LewisWater() {
-  // O in center, 2 lone pairs (top and right), 2 H below (bent).
+function LewisClf3() {
   return (
     <g>
-      {/* Lone pairs */}
-      <circle cx={47} cy={18} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={53} cy={18} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={78} cy={37} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={78} cy={43} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      {/* Two lone pairs on Cl — left and right */}
+      <circle cx={32} cy={37} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={32} cy={43} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={68} cy={37} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={68} cy={43} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
       {/* Bonds */}
-      <Bond x1={50} y1={40} x2={26} y2={66} />
-      <Bond x1={50} y1={40} x2={22} y2={56} />
-      <AtomLabel x={50} y={40} label="O" />
-      <AtomLabel x={22} y={70} label="H" />
-      <AtomLabel x={18} y={56} label="H" />
+      <Bond x1={50} y1={40} x2={50} y2={14} />
+      <Bond x1={50} y1={40} x2={50} y2={66} />
+      <Bond x1={50} y1={40} x2={84} y2={40} />
+      <AtomLabel x={50} y={40} label="Cl" />
+      <FluorineWithLonePairs cx={50} cy={10} />
+      <FluorineWithLonePairs cx={50} cy={70} />
+      <FluorineWithLonePairs cx={88} cy={40} />
     </g>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Wedge-and-dash diagrams
+// Wedge-and-dash diagrams — schematic for trigonal bipyramidal.
 // ---------------------------------------------------------------------------
 
-function WedgeDashDiagram({ molecule }: { molecule: Molecule }) {
+function WedgeDashDiagram({
+  molecule,
+  expanded = false,
+}: {
+  molecule: Molecule
+  expanded?: boolean
+}) {
   return (
-    <svg viewBox="0 0 100 80" className="size-full text-text-primary">
-      {molecule === 'methane' && <WedgeMethane />}
-      {molecule === 'ammonium' && <WedgeAmmonium />}
-      {molecule === 'ammonia' && <WedgeAmmonia />}
-      {molecule === 'water' && <WedgeWater />}
+    <svg
+      viewBox="0 0 100 80"
+      preserveAspectRatio="xMidYMid meet"
+      className={cn('text-text-primary', expanded ? 'h-auto w-full max-w-[300px]' : 'h-[88px] w-[110px]')}
+    >
+      {(molecule === 'xef2' || molecule === 'xef2-axial-strain') && <WedgeXef2 />}
+      {molecule === 'clf3' && <WedgeClf3 />}
     </svg>
   )
 }
 
-/** Filled triangle pointing from central atom to H (wedge = "out of page"). */
-function Wedge({ x1, y1, x2, y2 }: { x1: number; y1: number; x2: number; y2: number }) {
-  const dx = x2 - x1
-  const dy = y2 - y1
-  const len = Math.hypot(dx, dy)
-  const ux = dx / len
-  const uy = dy / len
-  const px = -uy
-  const py = ux
-  const tipInset = 7
-  const baseInset = 8
-  const tipX = x1 + ux * tipInset
-  const tipY = y1 + uy * tipInset
-  const baseX = x2 - ux * baseInset
-  const baseY = y2 - uy * baseInset
-  const width = 2.5
-  return (
-    <polygon
-      points={`${tipX},${tipY} ${baseX + px * width},${baseY + py * width} ${baseX - px * width},${baseY - py * width}`}
-      fill={LEWIS_STROKE}
-    />
-  )
-}
-
-/** Dashed segments pointing from central atom to H ("into page"). */
-function Dash({ x1, y1, x2, y2 }: { x1: number; y1: number; x2: number; y2: number }) {
-  const dx = x2 - x1
-  const dy = y2 - y1
-  const len = Math.hypot(dx, dy)
-  const ux = dx / len
-  const uy = dy / len
-  const px = -uy
-  const py = ux
-  const tipInset = 7
-  const baseInset = 8
-  const segments: ReactNode[] = []
-  const segCount = 5
-  for (let i = 0; i < segCount; i++) {
-    const t = (i + 0.5) / segCount
-    const cx = x1 + ux * (tipInset + (len - tipInset - baseInset) * t)
-    const cy = y1 + uy * (tipInset + (len - tipInset - baseInset) * t)
-    const w = 0.6 + t * 1.6 // grow with distance from central atom
-    segments.push(
-      <line
-        key={i}
-        x1={cx + px * w}
-        y1={cy + py * w}
-        x2={cx - px * w}
-        y2={cy - py * w}
-        stroke={LEWIS_STROKE}
-        strokeWidth={0.8}
-        strokeLinecap="round"
-      />,
-    )
-  }
-  return <g>{segments}</g>
-}
-
-function WedgeMethane() {
+function WedgeXef2() {
+  // F's axial (top and bottom). Lone pairs in the equatorial plane —
+  // represented as paired dots in the plane.
   return (
     <g>
-      <Bond x1={50} y1={42} x2={26} y2={62} />
-      <Bond x1={50} y1={42} x2={74} y2={62} />
-      <Wedge x1={50} y1={42} x2={50} y2={70} />
-      <Dash x1={50} y1={42} x2={50} y2={14} />
-      <AtomLabel x={50} y={42} label="C" />
-      <AtomLabel x={22} y={66} label="H" />
-      <AtomLabel x={78} y={66} label="H" />
-      <AtomLabel x={50} y={74} label="H" />
-      <AtomLabel x={50} y={10} label="H" />
+      {/* Axial F's */}
+      <Bond x1={50} y1={40} x2={50} y2={14} />
+      <Bond x1={50} y1={40} x2={50} y2={66} />
+      <AtomLabel x={50} y={40} label="Xe" />
+      <AtomLabel x={50} y={10} label="F" />
+      <AtomLabel x={50} y={70} label="F" />
+      {/* Equatorial lone pair dots — three pairs around Xe */}
+      <circle cx={28} cy={42} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={32} cy={38} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={72} cy={38} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={68} cy={42} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={47} cy={56} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={53} cy={56} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
     </g>
   )
 }
 
-function WedgeAmmonium() {
+function WedgeClf3() {
+  // Two axial F's, one equatorial F with a wedge bond (toward viewer).
   return (
     <g>
-      <Bond x1={50} y1={42} x2={26} y2={62} />
-      <Bond x1={50} y1={42} x2={74} y2={62} />
-      <Wedge x1={50} y1={42} x2={50} y2={70} />
-      <Dash x1={50} y1={42} x2={50} y2={14} />
-      <AtomLabel x={50} y={42} label="N" />
-      <AtomLabel x={22} y={66} label="H" />
-      <AtomLabel x={78} y={66} label="H" />
-      <AtomLabel x={50} y={74} label="H" />
-      <AtomLabel x={50} y={10} label="H" />
-      <text
-        x={68}
-        y={26}
-        fontSize="9"
-        fontFamily="ui-sans-serif, system-ui, sans-serif"
-        fontWeight={600}
-        fill={LEWIS_STROKE}
-      >
-        +
-      </text>
-    </g>
-  )
-}
-
-function WedgeAmmonia() {
-  return (
-    <g>
-      <Bond x1={50} y1={42} x2={26} y2={62} />
-      <Wedge x1={50} y1={42} x2={74} y2={62} />
-      <Dash x1={50} y1={42} x2={50} y2={14} />
-      <AtomLabel x={50} y={42} label="N" />
-      <AtomLabel x={22} y={66} label="H" />
-      <AtomLabel x={78} y={66} label="H" />
-      <AtomLabel x={50} y={10} label="H" />
-      {/* Lone pair as small pair of dots above N */}
-      <circle cx={43} cy={30} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={43} cy={36} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-    </g>
-  )
-}
-
-function WedgeWater() {
-  return (
-    <g>
-      <Bond x1={50} y1={42} x2={22} y2={62} />
-      <Bond x1={50} y1={42} x2={78} y2={62} />
-      <AtomLabel x={50} y={42} label="O" />
-      <AtomLabel x={18} y={66} label="H" />
-      <AtomLabel x={82} y={66} label="H" />
-      {/* Two lone pairs */}
-      <circle cx={47} cy={22} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={53} cy={22} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={47} cy={28} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={53} cy={28} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <Bond x1={50} y1={40} x2={50} y2={14} />
+      <Bond x1={50} y1={40} x2={50} y2={66} />
+      {/* Equatorial F as a wedge */}
+      <polygon points="56,42 78,38 78,46" fill={LEWIS_STROKE} />
+      <AtomLabel x={50} y={40} label="Cl" />
+      <AtomLabel x={50} y={10} label="F" />
+      <AtomLabel x={50} y={70} label="F" />
+      <AtomLabel x={84} y={42} label="F" />
+      {/* Two equatorial lone pairs */}
+      <circle cx={28} cy={42} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={32} cy={38} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={47} cy={58} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={53} cy={58} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
     </g>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Geometry + facts card
+// Geometry chart card — shape name, bond angle, domain count.
 // ---------------------------------------------------------------------------
 
 const GEOMETRY_FACTS: Record<Molecule, { shape: string; angle: string; domains: string }> = {
-  methane: {
-    shape: 'Tetrahedral',
-    angle: '109.5°',
-    domains: '4 bonded, 0 lone',
+  xef2: {
+    shape: 'Linear',
+    angle: '180°',
+    domains: '2 bonded, 3 lone',
   },
-  ammonium: {
-    shape: 'Tetrahedral',
-    angle: '109.5°',
-    domains: '4 bonded, 0 lone',
+  'xef2-axial-strain': {
+    shape: 'Strained (illegal)',
+    angle: '—',
+    domains: '2 bonded, 3 lone',
   },
-  ammonia: {
-    shape: 'Trigonal pyramidal',
-    angle: '~107°',
-    domains: '3 bonded, 1 lone',
-  },
-  water: {
-    shape: 'Bent',
-    angle: '~104.5°',
-    domains: '2 bonded, 2 lone',
+  clf3: {
+    shape: 'T-shaped',
+    angle: '~87.5° axial / 90° eq',
+    domains: '3 bonded, 2 lone',
   },
 }
 
-function GeometryCard({ molecule }: { molecule: Molecule }) {
+function GeometryCard({
+  molecule,
+  expanded = false,
+}: {
+  molecule: Molecule
+  expanded?: boolean
+}) {
   const facts = GEOMETRY_FACTS[molecule]
   return (
-    <div className="flex w-full flex-col gap-1 px-1 text-left">
-      <div className="text-text-primary text-[12px] font-medium leading-tight">{facts.shape}</div>
-      <div className="text-text-secondary font-mono text-[11px] leading-tight">{facts.angle}</div>
-      <div className="text-text-tertiary text-[9.5px] leading-tight">{facts.domains}</div>
-      <div className="text-text-tertiary text-[9.5px] leading-tight">
-        Electron domain: tetrahedral
+    <div className="flex w-full flex-col items-center gap-1 text-center">
+      <div
+        className={cn(
+          'text-text-primary font-medium leading-tight',
+          expanded ? 'text-[32px]' : 'text-[11px]',
+        )}
+      >
+        {facts.shape}
+      </div>
+      <div
+        className={cn(
+          'text-text-secondary font-mono leading-tight',
+          expanded ? 'text-[18px]' : 'text-[10px]',
+        )}
+      >
+        {facts.angle}
       </div>
     </div>
   )

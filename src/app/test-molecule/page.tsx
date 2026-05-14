@@ -5,14 +5,14 @@ import { MoleculeScene } from '@/components/prototype/MoleculeScene'
 import type { Molecule } from '@/lib/artifact-script'
 import type { ChipState } from '@/lib/prototype-store'
 
-const MOLECULES: Molecule[] = ['methane', 'ammonia', 'ammonium', 'water']
+const MOLECULES: Molecule[] = ['xef2', 'xef2-axial-strain', 'clf3']
 
 export default function TestMoleculePage() {
-  const [molecule, setMolecule] = useState<Molecule>('ammonia')
+  const [molecule, setMolecule] = useState<Molecule>('xef2')
   const [chipState, setChipState] = useState<ChipState>({
     bonds: true,
     lonePairs: true,
-    orbitals: true,
+    equatorialPlane: true,
     angles: true,
   })
 

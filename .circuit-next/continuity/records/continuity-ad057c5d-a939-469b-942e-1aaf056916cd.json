@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "record_id": "continuity-ad057c5d-a939-469b-942e-1aaf056916cd",
+  "project_root": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main",
+  "created_at": "2026-05-14T21:13:22.631Z",
+  "git": {
+    "cwd": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main"
+  },
+  "narrative": {
+    "goal": "Continue iterating on the XeF2 artifact via Agentation MCP annotations - fresh session needed because MCP tools load only at session startup",
+    "next": "In fresh session: confirm Agentation MCP tools are loaded, then call agentation_watch_annotations to pick up new pinned annotations. Dev server is on http://localhost:3002 (NOT 3000 - that port was taken by another project after the education-labs server crashed mid-edit).",
+    "state_markdown": "- Major restructure shipped this session: Artifact is now ONE full-bleed MoleculeScene canvas with header, right pane, and cards row all overlaid on top (each with bg-surface/85 + backdrop-blur).\n- Multi-axis safe area: MoleculeScene takes topOverlayInsetPx (64), rightOverlayInsetPx (344), bottomOverlayInsetPx (170). applyViewOffset centers the molecule in the resulting safe rectangle via Three.js camera.setViewOffset. safeAreaZoom scales by min(horizRatio, vertRatio) * 0.8 (clamped 0.3-1.0) to actually fit, not just shrink proportionally.\n- Only the default treatment applies safe-area zoom; lewis/wedge/geometry stay at zoom=1. Treatment transitions lerp zoom alongside camera position/FOV.\n- SceneLegend and ResetViewButton repositioned via inline style top/right derived from inset props so they sit inside the safe area (below header, left of right pane).\n- Right pane: 324px floating card at top-[60px] bottom-3 right-3, vertically centered content (flex min-h-full justify-center). Carousel transitions on pagination - artifactSlideInRight / artifactSlideInLeft keyframes in globals.css, direction tracked via useRef of prev arc-position in RightPane.\n- Cards row: 3 panels (materials removed), right-[340px] so it does not slip under the right pane. bg-surface/80 backdrop-blur-md per-card.\n- Materials moved from cards row to header as stacked-paper thumbnails (3 max, plus/minus 7 deg rotation, 8px offset). Pulses on panel-materials cue.\n- BubbleCard refactored: plain serif 17px, no border/bg/shadow/padding. Filled the pane via parent layout.\n- Artifact sizing: h-[480px] with max-h-[calc(100dvh - header - composer - 90px)] on the inner grid container. New --composer-height: 144px CSS var added to globals.css.\n- Canvas no longer has rounded corners (removed rounded-lg from the artifact section).\n- Debug page at /artifact-debug: container wrapper removed; seeds Naomi attachments via fetch so the materials stack renders.\n- API resilience: /api/chat messages.stream() is wrapped in withBackoff with a textEmitted guard so transient 5xx/429 errors retry only before any tokens hit the wire. Exported defaultRetryable from retry.ts.\n- InputBar textarea: added field-sizing:content for autogrow.\n- Browser session was at localhost:3000 until the dev server crashed mid-edit; restarted on 3002. The maybe project at /Users/petepetrash/Code/maybe took port 3000.",
+    "debt_markdown": "- Pre-existing Next.js 16 Server Action lint warnings on onRotationDelta (MoleculeScene) and onClose (MaterialsLightbox). Functionally harmless; the warning is about exporting client components with function props.\n- safeAreaZoom uses an empirical 0.8x multiplier on the safe-area ratio to make the molecule actually fit. May need re-tuning if camera positions or molecule scale change.\n- --composer-height: 144px is static; does not track the InputBar growing when the user types multi-line content. Could be measured dynamically but would require JS in chat layout.\n- 0.3 minimum clamp on safeAreaZoom - if viewport is very narrow, molecule could be too tiny.\n- /test-molecule dev page still kept as utility (kickoff state flagged this; pending decision on stripping before merge).\n- Agentation annotation mp5yb96p-69z1pe (safe area) and all subsequent ones are resolved. None outstanding.\n- ClF3 axial-axial angle still rendered as 180 idealized in 3D (real value ~87.5)."
+  },
+  "continuity_kind": "standalone",
+  "resume_contract": {
+    "mode": "resume_standalone",
+    "auto_resume": false,
+    "requires_explicit_resume": true
+  }
+}
