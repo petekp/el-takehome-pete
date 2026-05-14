@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "run_id": "355f1f49-0bbc-4726-9c5c-cc357e6c4791",
+  "flow_id": "build",
+  "selected_flow": "build",
+  "routed_by": "explicit",
+  "router_reason": "explicit flow positional argument",
+  "outcome": "aborted",
+  "headline": "Circuit: Run aborted.",
+  "status_text": "Run aborted.",
+  "details": [
+    "Worker access: A worker can edit this checkout.",
+    "Run note: Run closed with outcome aborted.",
+    "Abort reason: route 'retry' for step 'act-step' exhausted max_attempts=2; last recovery reason: verification step 'verify-step' failed one or more commands"
+  ],
+  "evidence_warnings": [],
+  "run_folder": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main/.circuit-next/runs/355f1f49-0bbc-4726-9c5c-cc357e6c4791",
+  "result_path": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main/.circuit-next/runs/355f1f49-0bbc-4726-9c5c-cc357e6c4791/reports/result.json",
+  "report_paths": [
+    {
+      "label": "Run result",
+      "path": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main/.circuit-next/runs/355f1f49-0bbc-4726-9c5c-cc357e6c4791/reports/result.json"
+    }
+  ]
+}

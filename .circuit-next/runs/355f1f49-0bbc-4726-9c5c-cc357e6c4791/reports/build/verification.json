@@ -1,0 +1,19 @@
+{
+  "overall_status": "failed",
+  "commands": [
+    {
+      "command_id": "npm-check",
+      "argv": [
+        "npm",
+        "run",
+        "check"
+      ],
+      "cwd": ".",
+      "exit_code": 1,
+      "status": "failed",
+      "duration_ms": 82,
+      "stdout_summary": "",
+      "stderr_summary": "npm error Missing script: \"check\"\nnpm error\nnpm error To see a list of scripts, run:\nnpm error   npm run\nnpm error A complete log of this run can be found in: /Users/petepetrash/.npm/_logs/2026-05-14T04_15_17_310Z-debug-0.log\n"
+    }
+  ]
+}

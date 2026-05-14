@@ -1,0 +1,25 @@
+{
+  "objective": "KICKOFF Build Step 4, beat 1 of 7: implement /api/prediction-options (NDJSON envelope, Anthropic tool-use via Sonnet 4.6, exp backoff via withBackoff, returns {framing, options:[{id,label,isCorrect,misconceptionTag}]}) AND upgrade the predict-beat UI to match PRD §3.2 — header \"Your prediction · 1 of 2\" left + End button right, numbered option rows with number badges, free-text textarea sized to one option row with placeholder \"Answer in your own words…\". Wire the endpoint from prototype-store chooseLearn() (replace the registry-fallback static commit). Free-text submission records prediction.freeText (already in the type). End button transitions arc back to idle/chat with no card produced. Reuse misconceptionTag tags allSettled / default-timeout / truth. Keep registry fallback as graceful-degrade path on persistent endpoint failure. Build + lint must stay clean.",
+  "approach": "Make the smallest safe change inside scope: Make the smallest safe change that satisfies the requested goal.",
+  "slices": [
+    "Satisfy: The requested behavior is implemented",
+    "Satisfy: Verification passes",
+    "Satisfy: Review completes without a blocking issue"
+  ],
+  "verification": {
+    "commands": [
+      {
+        "id": "npm-check",
+        "cwd": ".",
+        "argv": [
+          "npm",
+          "run",
+          "check"
+        ],
+        "timeout_ms": 120000,
+        "max_output_bytes": 200000,
+        "env": {}
+      }
+    ]
+  }
+}

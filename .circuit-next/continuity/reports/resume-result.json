@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "action": "resume",
+  "status": "resumed",
+  "source": "pending_record",
+  "record_id": "continuity-bf70a1a8-31a9-4436-adb4-1fd327ae7125",
+  "continuity_path": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main/.circuit-next/continuity/records/continuity-bf70a1a8-31a9-4436-adb4-1fd327ae7125.json",
+  "index_path": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main/.circuit-next/continuity/index.json",
+  "operator_summary_markdown_path": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main/.circuit-next/continuity/reports/operator-summary.md"
+}
