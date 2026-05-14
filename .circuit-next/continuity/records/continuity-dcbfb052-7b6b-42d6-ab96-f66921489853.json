@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "record_id": "continuity-dcbfb052-7b6b-42d6-ab96-f66921489853",
+  "project_root": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main",
+  "created_at": "2026-05-14T07:15:01.716Z",
+  "git": {
+    "cwd": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main"
+  },
+  "narrative": {
+    "goal": "Hear out the user's proposal to pivot the prototype: focus primarily on the interactive explainer (fka workshop) and drop a lot of the other surfaces. Reshape scope before any implementation.",
+    "next": "Open the next session by inviting the user to lay out the pivot cold — what stays, what gets cut, why the explainer is the right anchor, what the renamed surface should be called/feel like. Do not pre-empt with the existing polish queue or start refactoring. Align on scope first; only then plan execution.",
+    "state_markdown": "- Working dir: /Users/petepetrash/Code/anthropic/education-labs-takehome-main. Next.js 16, React 19, Tailwind v4, npm. Dev server typically on :3001.\n- Just shipped: map panel header rewrite. Serif \"Your map\" + body subtitle \"Concepts you've explored with Claude collect here.\" in src/components/prototype/SidePanel.tsx (PanelHeader, view-conditional). Workshop branch of the conditional kept the existing eyebrow + h2 unchanged. Build clean, verified live at /debug Side panel demo.\n- Rationale anchored in docs/conversation-4-transcript.md: the original sketch session said \"the central node IS the title\" and \"minimal chrome — your map as a quiet metadata label.\" The previous build had grown to eyebrow + h2 + central pill (three labels for the same concept). The rewrite recovers the original intent in a notebook register rather than dashboard register.\n- AGENT_CHANGELOG.md updated under Deviations with the full rationale.\n- Two follow-ups surfaced this session but not addressed before the pivot ask: (a) workshop panel header has the same triple-titling problem (eyebrow WORKSHOP + h2 Promise.all + internal back-bar \"Back to map · Promise.all\"); (b) the line below the map viz currently reads \"Tap a dashed pill to see what it points to\" but the original brief had an invitational atmospheric line — \"Nearby concepts to wander into — or stay where you are.\"\n- Prior handoff's map-polish queue (cardinal ray weight, diagonal pill spacing, try/catch pill overflow at 480px, ghost-pill hover, reduced-motion, decorative ray tips) was the planned next batch. None of it was picked up because the user redirected to the header first, then to this pivot.",
+    "debt_markdown": "- Rename pending: user signaled \"workshop\" → \"interactive explainer\" (\"fka workshop\"). Codebase still uses \"workshop\" pervasively: WorkshopView, WorkshopChat, /api/workshop-opening, /api/workshop-chat, prototype-store SidePanelView value \"workshop\", concept descriptors workshopOpening, AGENT_CHANGELOG references, KICKOFF doc references. A rename is a distinct slice of work — scope it explicitly with the user once the pivot shape is settled.\n- The pivot will likely supersede the prior handoff's map-polish queue. Do NOT auto-execute that queue when resuming — let the pivot reshape priorities first. If the map gets cut entirely, half that queue is moot.\n- Open question for the user: which surfaces to drop. Candidates that exist today and may or may not survive the pivot: the affordance two-button choice; the wrapper path; the chat-side predict/reveal/reflect structured exchange; the inline card; the map; the ghost-node hint behavior. The explainer's opening predict-reveal already exists and may absorb scope from the chat-side exchange.\n- KICKOFF Step 7 (workshop chrome: spaced-rep chip stub + overflow menu with notes/remove) — directly relevant to the pivot since the explainer IS that surface.\n- KICKOFF Step 8 (accessibility pass) and Step 9 (ship prep: Vercel preview, ≤8 min screen recording, design rationale doc) still outstanding regardless of pivot.\n- Workshop chrome triple-titling noted this session but not fixed; defer until the pivot resolves whether that chrome even survives in current form."
+  },
+  "continuity_kind": "standalone",
+  "resume_contract": {
+    "mode": "resume_standalone",
+    "auto_resume": false,
+    "requires_explicit_resume": true
+  }
+}

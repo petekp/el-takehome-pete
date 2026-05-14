@@ -10,8 +10,8 @@ import {
   SparkIndicator,
   UserMessage,
 } from '@/components/chat'
-import { SidePanel } from '@/components/prototype'
 import { useChatStore } from '@/lib/chat-store'
+import { usePrototypeStore } from '@/lib/prototype-store'
 
 export default function ChatView({ params }: { params: Promise<{ chatId: string }> }) {
   const { chatId } = use(params)
@@ -27,25 +27,22 @@ export default function ChatView({ params }: { params: Promise<{ chatId: string 
     sendReply,
     stopStream,
   } = useChatStore()
+  const { state } = usePrototypeStore()
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const chat = chats.find((c) => c.id === chatId)
   const isStreaming = streamingChatId === chatId
   const showInFlight = isStreaming && (thinking || streamBuffer)
+  const artifactMessageId = state.arc.artifactMessageId
 
   const messageCount = chat?.messages.length ?? 0
   const lastRole = chat?.messages[chat.messages.length - 1]?.role
 
   useEffect(() => {
-    // Scroll to bottom on chat navigation (initial mount of a thread).
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [chatId])
 
   useEffect(() => {
-    // Scroll only when a user message is appended — their input jumps into
-    // view. No auto-scroll during streaming or on assistant commit; long
-    // responses extend past the viewport and the user scrolls manually if
-    // they want to follow. Matches Claude.ai's behavior.
     if (lastRole === 'user') {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
     }
@@ -64,15 +61,19 @@ export default function ChatView({ params }: { params: Promise<{ chatId: string 
 
         <div ref={scrollRef} className="scroll-area flex-1 overflow-auto pt-6">
           <div className="mx-auto max-w-[var(--content-max-width)] px-6 pb-6">
-            {chat.messages.map((m) =>
-              m.role === 'user' ? (
-                <UserMessage key={m.id} text={m.text} />
-              ) : (
-                <ClaudeMessage key={m.id}>
+            {chat.messages.map((m) => {
+              if (m.role === 'user') return <UserMessage key={m.id} text={m.text} />
+              const isArtifact = m.id === artifactMessageId
+              return (
+                <ClaudeMessage
+                  key={m.id}
+                  id={`message-${m.id}`}
+                  className={isArtifact ? '!px-0' : undefined}
+                >
                   <AssistantBody text={m.text} />
                 </ClaudeMessage>
-              ),
-            )}
+              )
+            })}
 
             {showInFlight && (
               <ClaudeMessage>
@@ -101,8 +102,6 @@ export default function ChatView({ params }: { params: Promise<{ chatId: string 
           Claude can make mistakes. Please double-check responses.
         </div>
       </div>
-
-      <SidePanel />
     </div>
   )
 }

@@ -1,34 +1,25 @@
 # Circuit Handoff
 
 Source: saved continuity record
-Record: continuity-2e41160f-094f-4983-bb91-6a57fe10fabc
+Record: continuity-9fbddaa6-e298-4082-a7dd-20bfec57a95e
 Kind: standalone
 
 ## Goal
-Continue refining the map. The spark/asterisk layout is in place — central solid "Promise.all" pill + 4 cardinal ghost pills + 2 diagonal pills + 2 decorative ray tips. Now polish for production: ray weights, pill sizing/positioning, hover/interaction states, edge-case label fit.
+Continue iterating on the chemistry molecular-geometry artifact (visual polish, chip interactions, edge cases).
 
 ## Next Action
-Open MapView.tsx with the user. Walk through what landed (pills replacing circles, spark rays evoking the Claude logomark, 6 ghosts cardinal+diagonal). Then pick up polish in this rough order: (1) tune cardinal ray weight — they read subtle at strokeWidth 1.5 / opacity 0.45 against the cream page, maybe push to 0.6-0.7 or add a slight glow; (2) verify "try/catch with promises" pill (22 chars, longest label) doesn't overflow the map left edge at production 480px panel width — check live in /debug Side panel demo and /new arc walk; (3) consider widening diagonal-pill spacing — NE pill (Promise.any) sits visually close to E pill (Promise.race) at production size; (4) hover treatment on ghost pills could be richer (subtle scale, ray highlight); (5) reduced-motion handling; (6) the decorative NW/SE ray tips could be slightly more prominent. Defer KICKOFF Step 7 (workshop chrome: spaced-rep chip + overflow menu) until map polish lands. Append any deviations to AGENT_CHANGELOG.md.
+Wait for user direction, then iterate. Likely candidates: differentiate orbital-lobe hue from lone-pair so they read as distinct chip semantics; tune water default camera angle; exercise the chips manually in the real chat flow.
 
 ## State
-- Working dir: /Users/petepetrash/Code/anthropic/education-labs-takehome-main. Next.js 16, React 19, Tailwind v4, pnpm. Dev server typically on :3001.
-- Build + lint clean (3 pre-existing <img> warnings unchanged, out of scope).
-- WorkshopView fully shipped per KICKOFF Step 5: configurable per-track outcome pickers (R/✕/∞), preset chips (Two resolve · one hangs / All resolve / One rejects / Two reject · staggered), raf-driven Play animation (1.6s wall-clock with quadratic ease-out, 1.25× overshoot for hangs), aggregate row at top with state caption, inner-container inset visually wrapping the fetches per Promise.all([…]) code metaphor. Collapsed slider — native input is transparent + a11y/drag, custom marker on top owns visuals. Predict-submit auto-plays the truth scenario.
-- SidePanel widened to 800px when view=workshop (480 for map). View-aware width with 250ms transition.
-- Workshop two-column layout at 800px: 3fr viz / 2fr chat (chat column hosts opening framing + WorkshopPredict + reveal caption + WorkshopChat).
-- Concept rolled up: promise-all-hang → promise-all, title "Promise.all" (was "How Promise.all handles a hanging promise"). Defensive guard in loadFromStorage drops arcs with unknown concept ids.
-- MapView fully rewritten: removed halo + atmospheric dots, replaced circles with HTML pills, arranged in Claude-logomark spark layout. 6 ghost pills (4 cardinal at N/E/S/W + 2 diagonal at NE/SW) with SVG rays radiating from center. 2 decorative rays at NW/SE with small dot tips (no labels) for the asymmetric burst silhouette.
-- 6 ghost nodes in registry (added Promise.any + try/catch with promises). API ghost-nodes bumped to minItems/maxItems 6; system prompt coaches cardinal-then-diagonal tier ordering. prototype-store slice → 6.
-- AGENT_CHANGELOG.md created at repo root tracking deviations from PRD/KICKOFF, grouped by surface (concept, workshop, map). Project memory saved noting this convention.
+- Chemistry pivot is shipped end-to-end. All 11 original tasks complete; build passes; smoke-tested in browser.
+- Just completed a contrast iteration: lone-pair bumped to #6b46c1 @ 0.62, orbital lobe to #8b6dd5 @ 0.46, angle arc to #5a544c @ 0.85. Angle label simplified to bare text (no container, 500-weight, scale 0.5 x 0.19).
+- Fixed a sprite rendering bug: the canvas transparent areas were appearing as a black rectangle due to ACES tonemapping + missing alphaTest. Added toneMapped: false and alphaTest: 0.05 to SpriteMaterial in makeTextSprite.
+- /test-molecule page at src/app/test-molecule/page.tsx lets you swap molecules and toggle chips directly, no chat flow needed — much faster for visual iteration than walking the artifact arc.
+- Dev environment notes: port 3000 is another local project (Code/maybe), 3001 is for this repo. Browser automation tabs occasionally wander between localhost ports during smoke tests — the /test-molecule page is more reliable than walking through the full chat flow.
 
 ## Debt
-- Cardinal map rays at strokeWidth 1.5 / opacity 0.45 read subtle against the cream bg-page. Bumping opacity or adding a slight inner glow could make the spark more legibly Claude-mark-like.
-- "try/catch with promises" is the longest ghost label (22 chars including space). At SW position (CX-100, CY+100) the pill may overflow the left edge of the map container at production 480px panel width. Hasn't been verified live in the actual chat→map arc — needs the API to return 6 ghosts AND the map to render at 432px (the panel content area). Debug Side panel demo at /debug bottom is the closest test.
-- NE diagonal pill (Promise.any) sits visually close to E cardinal pill (Promise.race) at production size — even though geometric distances differ, the pill widths bring them near. Consider pushing diagonals slightly further out (e.g., +20px from center) OR rotating diagonal angles a few degrees off-45° for asymmetry that matches the Claude mark more faithfully.
-- Hover treatment on ghost pills currently just shifts border + text color. Could include subtle scale (1.02) and possibly highlight the connecting ray to communicate the conceptual link.
-- Decorative ray tips at NW/SE are very subtle (opacity 0.35, r=2.5). Could be slightly more prominent — or could rotate angles for irregularity, since the Claude mark has rays at non-45° angles.
-- No reduced-motion handling on the workshop Play animation or the central-pill hover-scale.
-- KICKOFF Step 7 (workshop chrome): spaced-rep chip with stubbed schedule confirmation + overflow menu with "Your notes" (editable reflection) + "Remove from map" (destructive with confirmation). Outstanding.
-- KICKOFF Step 8 (a11y pass): arrow-key nav on prediction options, focus management between surfaces, ARIA roles audit, accessible alternative for viz dynamic state.
-- KICKOFF Step 9 (ship prep): Vercel preview deploy, ≤8 min screen recording walkthrough, design rationale doc.
-- Pre-existing chat-hydration race noted in previous handoff: reloading /chat/[id] URL bounces to /new before chat-store hydrates. Not user-visible in demo, but flagged.
+- Lone pair and orbital lobes share a purple family at similar saturation — they read as one element when both chips are on. Consider shifting orbital lobes to a different hue (teal or amber) for cleaner visual hierarchy.
+- Water default camera angle in the chat flow can make the two H atoms appear overlapping on the camera axis. Could rotate the initial molecule orientation 90° around y, or angle the default camera position.
+- Lone pair / orbital lobe / bond angle chips have not been exercised manually in the real chat flow yet — only via the /test-molecule page. Worth a pass to confirm they behave correctly inside the prototype-store-driven artifact context.
+- Annotation-mode dimming is correctly implemented but has no visible effect on methane+Lewis (no lone pairs to dim). Worth eyeballing on ammonia+Lewis to confirm the fade pattern reads as intended.
+- Decision pending: keep /test-molecule page as a dev utility, or strip before any merge to main.

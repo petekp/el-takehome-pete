@@ -10,52 +10,94 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { CONCEPTS, type ConceptId } from './concepts'
 import {
-  CONCEPTS,
-  getConcept,
-  type ConceptId,
-  type GhostNode,
-  type PredictionOption,
-} from './concepts'
+  classifyFreeText,
+  CLOSING_BUBBLE,
+  OPENING_BUBBLES,
+  PATHS,
+  PREDICTION_1,
+  type Bubble,
+  type FocusState,
+  type MisconceptionKey,
+  type Molecule,
+} from './artifact-script'
 import { useChatStore } from './chat-store'
-import { parseEnvelope } from './protocol'
 
 /**
- * State umbrella for the affordance arc. Sits alongside ChatStore (composed
- * under ChatProvider) so the arc's own concerns — beat progression, side
- * panel, the concept being explored — don't leak into the generic chat layer.
+ * State umbrella for the artifact arc. Composed under ChatProvider so the
+ * arc's own concerns — beat progression, the artifact's interactive state —
+ * don't leak into the generic chat layer.
  *
- * Persisted to localStorage under STORAGE_KEY. /new resets the arc to its
- * idle state (see resetArc) so each fresh demo run starts clean.
+ * After the chemistry pivot, the artifact additionally tracks:
+ *   - activeMolecule: which molecule the 3D viewport is currently rendering.
+ *     Each bubble can declare a `molecule` field; advancing the bubble
+ *     mutates activeMolecule and triggers a smooth transition in the scene.
+ *   - chipState: which toggle chips (bonds / lone pairs / orbitals / angles)
+ *     are currently on. Atoms are always on.
+ *   - panelsClicked: which representation panels the user has clicked. The
+ *     Beat-3 explore-the-panels bubble gates on this list reaching length 2.
  */
 
-/**
- * The path the user takes after the affordance is offered.
- *  - 'wrapper': the literal ask was honored — γ.2 wrapper response.
- *  - 'learning': the user opted into the structured exchange.
- */
 export type ArcPath = 'wrapper' | 'learning'
 
 export type ArcBeat =
   | 'idle' // no trigger fired
   | 'choosing' // affordance shown; waiting for path selection
-  | 'wrapper-response' // wrapper path streaming/complete
-  | 'predicting' // prediction options shown
-  | 'revealing' // reveal streaming
-  | 'reflecting' // reflection prompt active
-  | 'card-ready' // inline card committed; arc complete inside chat
-  | 'map-open' // side panel open with map view
-  | 'workshop-open' // side panel switched to workshop
-  | 'exchange-ended' // user hit End during the structured exchange — choice pill stays visible, downstream beats suppressed
+  | 'wrapper-response' // wrapper (decline) path streaming/complete
+  | 'artifact-active' // artifact open inline in chat, user is engaging
+  | 'artifact-resolved' // artifact reached the closing bubble; resources visible
+  | 'wrapper-followup' // post-artifact follow-up message streaming/complete
 
-export type Prediction = {
-  /** Set when the user picked a multiple-choice option. */
+/**
+ * Where the user is inside the artifact. Drives the bubble script the
+ * Artifact component reads.
+ *
+ *   opening    — beats 1–5: introducing the panels, exploring them, the
+ *                Lewis-omits-angles line, the transition to ammonia.
+ *   predict-1  — beat 6: Lewis-tells-shape prediction surface.
+ *   reveal-1   — beats 7–8: misconception-specific honor-and-correct, plus
+ *                the shared lone-pair-takes-space content and the
+ *                NH3↔NH4⁺ toggle moment.
+ *   predict-2  — beat 9: water-bond-angle prediction surface.
+ *   reveal-2   — beat 10: bond-angle reveal, branched per follow-up answer.
+ *   closing    — beat 11: multi-lens framing + resources.
+ */
+export type ArtifactStage =
+  | 'opening'
+  | 'predict-1'
+  | 'reveal-1'
+  | 'predict-2'
+  | 'reveal-2'
+  | 'closing'
+
+export type ArtifactPrediction = {
   optionId?: string
-  /** Set when the user typed free-text. */
   freeText?: string
+  misconceptionTag: MisconceptionKey
 }
 
-export type SidePanelView = 'map' | 'workshop'
+export type ChipKey = 'bonds' | 'lonePairs' | 'orbitals' | 'angles'
+
+export type ChipState = Record<ChipKey, boolean>
+
+export type RepresentationPanelId = 'lewis' | 'wedge' | 'geometry'
+
+export type ArtifactState = {
+  stage: ArtifactStage
+  bubbleIndex: number
+  focus: FocusState
+  activeMolecule: Molecule
+  chipState: ChipState
+  /** Representation panels the user has clicked. Drives the Beat-3 gate
+   *  and feeds annotation-mode highlighting. */
+  panelsClicked: RepresentationPanelId[]
+  /** Which panel (if any) is currently driving annotation mode on the 3D
+   *  scene. null = no annotation overlay. */
+  activePanel: RepresentationPanelId | null
+  prediction1: ArtifactPrediction | null
+  prediction2: ArtifactPrediction | null
+}
 
 export type ArcState = {
   beat: ArcBeat
@@ -67,29 +109,32 @@ export type ArcState = {
   triggerMessageId: string | null
   /** Assistant message that hosts the affordance buttons. */
   affordanceMessageId: string | null
-  prediction: Prediction | null
-  /** API-generated prediction beat content. Falls back to concept registry when null. */
-  predictionOptions: { framing: string; options: PredictionOption[] } | null
-  reveal: { text: string } | null
-  /** API-generated reflection framing line. Falls back to concept registry when null. */
-  reflectionFraming: string | null
-  reflection: { text: string } | null
-  /** API-generated card metadata (framing + verbatim concept title). Falls back to concept registry when null. */
-  cardMeta: { framing: string; conceptTitle: string } | null
-  /** API-generated ghost node labels + hints for the map. Falls back to concept registry when null. */
-  ghostNodes: GhostNode[] | null
-  /** API-generated workshop opening framing. Falls back to concept registry when null. */
-  workshopOpening: { framing: string } | null
-}
-
-export type SidePanelState = {
-  open: boolean
-  view: SidePanelView
+  /** Assistant message that hosts the <artifact/> tag. */
+  artifactMessageId: string | null
+  artifact: ArtifactState | null
 }
 
 export type PrototypeState = {
   arc: ArcState
-  sidePanel: SidePanelState
+}
+
+const DEFAULT_CHIP_STATE: ChipState = {
+  bonds: true,
+  lonePairs: false,
+  orbitals: false,
+  angles: false,
+}
+
+const EMPTY_ARTIFACT: ArtifactState = {
+  stage: 'opening',
+  bubbleIndex: 0,
+  focus: 'lewis-spotlight',
+  activeMolecule: 'methane',
+  chipState: DEFAULT_CHIP_STATE,
+  panelsClicked: [],
+  activePanel: null,
+  prediction1: null,
+  prediction2: null,
 }
 
 const EMPTY_ARC: ArcState = {
@@ -99,27 +144,20 @@ const EMPTY_ARC: ArcState = {
   chatId: null,
   triggerMessageId: null,
   affordanceMessageId: null,
-  prediction: null,
-  predictionOptions: null,
-  reveal: null,
-  reflectionFraming: null,
-  reflection: null,
-  cardMeta: null,
-  ghostNodes: null,
-  workshopOpening: null,
-}
-
-const EMPTY_SIDE_PANEL: SidePanelState = {
-  open: false,
-  view: 'map',
+  artifactMessageId: null,
+  artifact: null,
 }
 
 const INITIAL_STATE: PrototypeState = {
   arc: EMPTY_ARC,
-  sidePanel: EMPTY_SIDE_PANEL,
 }
 
-const STORAGE_KEY = 'education-labs:prototype-state'
+// Bumped from v1: prior Promise.all state in localStorage is incompatible
+// with the new chemistry state shape; force a fresh start for returning users.
+const STORAGE_KEY = 'education-labs:prototype-state:v2-chemistry'
+// Old keys to clean up on hydration so stale state from prior builds doesn't
+// linger.
+const STALE_STORAGE_KEYS = ['education-labs:prototype-state']
 
 export type FireArcInput = {
   conceptId: ConceptId
@@ -131,64 +169,40 @@ export type FireArcInput = {
 export type PrototypeStore = {
   state: PrototypeState
 
-  // Lifecycle ---------------------------------------------------------------
-  /** Reset the arc to idle. Called on /new mount and on demand. */
+  // Lifecycle -------------------------------------------------------------
   resetArc: () => void
 
-  // Arc transitions ---------------------------------------------------------
-  /** Arc-firing meta arrived from /api/chat. Move from idle → choosing. */
+  // Arc transitions -------------------------------------------------------
   fireArc: (input: FireArcInput) => void
-  /** User picked "Just write the wrapper". */
   chooseWrapper: () => void
-  /** User picked "Think it through first". */
   chooseLearn: () => void
-  recordPrediction: (prediction: Prediction) => void
-  recordReveal: (reveal: { text: string }) => void
-  recordReflection: (reflection: { text: string }) => void
-  /** Inline card is committed in chat; we're waiting for the user to click Open. */
-  markCardReady: () => void
-  /**
-   * User hit End inside the structured exchange. Suppress predict/reveal/reflect/card
-   * UI but keep the choice pill on the prior affordance message visible — the
-   * chat needs to remain legible for someone scrolling back. Idempotent.
-   */
-  endExchange: () => void
-  /** User clicked Open on the inline card. Open the side panel on the map view. */
-  openCard: () => void
-  /** User clicked the central map node. Switch the side panel to the workshop. */
-  enterWorkshop: () => void
 
-  // Side panel chrome ------------------------------------------------------
-  setSidePanel: (next: Partial<SidePanelState>) => void
-  closeSidePanel: () => void
+  // Artifact transitions --------------------------------------------------
+  /** Advance to the next bubble within the current stage. If there are no
+   *  more bubbles in this stage, transition to the next stage automatically.
+   *  Blocked when the active bubble has an unfulfilled gate. */
+  advanceArtifact: () => void
+  /** Step backward within the current stage. No cross-stage retreat — once
+   *  the user has predicted, they own that prediction. */
+  retreatArtifact: () => void
+  /** Record the first prediction and route to the matching misconception
+   *  branch. Sets stage to 'reveal-1'. */
+  recordPrediction1: (input: { optionId?: string; freeText?: string }) => void
+  /** Record the follow-up prediction. Sets stage to 'reveal-2'. */
+  recordPrediction2: (input: { optionId?: string; freeText?: string }) => void
+  /** User explicitly closes the artifact. Triggers the post-artifact
+   *  follow-up message. */
+  closeArtifact: () => void
+
+  // Artifact UI state -----------------------------------------------------
+  /** Toggle a chip on/off. Atoms are always on (not in ChipKey). */
+  toggleChip: (key: ChipKey) => void
+  /** Click a representation panel. Enters annotation mode for that panel
+   *  and counts toward the Beat-3 explore gate. Click again to deactivate. */
+  clickPanel: (id: RepresentationPanelId) => void
 }
 
-/**
- * Exported so the /debug route can supply isolated mock stores per zone — each
- * debug card needs its own arc state without leaking into the real arc.
- * Production code should use `usePrototypeStore` instead of consuming this
- * context directly.
- */
 export const PrototypeContext = createContext<PrototypeStore | null>(null)
-
-function loadFromStorage(): PrototypeState | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as PrototypeState
-    // If the stored arc points at a concept that no longer exists in the
-    // registry (e.g., we renamed promise-all-hang → promise-all), drop the
-    // arc and side panel rather than crash later when getConcept() throws.
-    const cid = parsed.arc?.conceptId
-    if (cid && !VALID_CONCEPT_IDS.has(cid)) {
-      return { arc: EMPTY_ARC, sidePanel: EMPTY_SIDE_PANEL }
-    }
-    return parsed
-  } catch {
-    return null
-  }
-}
 
 const VALID_CONCEPT_IDS = new Set<string>(CONCEPTS.map((c) => c.id))
 
@@ -196,15 +210,77 @@ function isConceptId(value: unknown): value is ConceptId {
   return typeof value === 'string' && VALID_CONCEPT_IDS.has(value)
 }
 
+function loadFromStorage(): PrototypeState | null {
+  if (typeof window === 'undefined') return null
+  // Best-effort cleanup of prior schema's keys.
+  for (const k of STALE_STORAGE_KEYS) {
+    try {
+      window.localStorage.removeItem(k)
+    } catch {
+      /* ignore */
+    }
+  }
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as PrototypeState
+    const cid = parsed.arc?.conceptId
+    if (cid && !VALID_CONCEPT_IDS.has(cid)) {
+      return { arc: EMPTY_ARC }
+    }
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function pickMisconceptionFromOption(optionId: string): MisconceptionKey {
+  const opt = PREDICTION_1.options.find((o) => o.id === optionId)
+  return opt?.misconceptionTag ?? 'unclassified'
+}
+
+/** Bubble sequence for the current stage of an artifact. */
+export function bubblesForStage(
+  stage: ArtifactStage,
+  prediction1: ArtifactPrediction | null,
+  prediction2: ArtifactPrediction | null,
+): Bubble[] {
+  if (stage === 'opening') return OPENING_BUBBLES
+  if (stage === 'predict-1' || stage === 'predict-2') return []
+  if (stage === 'reveal-1') {
+    const key = prediction1?.misconceptionTag ?? 'unclassified'
+    return PATHS[key].reveal1
+  }
+  if (stage === 'reveal-2') {
+    const key = prediction1?.misconceptionTag ?? 'unclassified'
+    const followUpId = prediction2?.optionId ?? Object.keys(PATHS[key].reveal2)[0]
+    return PATHS[key].reveal2[followUpId] ?? []
+  }
+  // closing
+  return [CLOSING_BUBBLE]
+}
+
+export function followUpFor(
+  prediction1: ArtifactPrediction | null,
+): { framing: string; options: typeof PREDICTION_1.options } {
+  const key = prediction1?.misconceptionTag ?? 'unclassified'
+  return PATHS[key].followUp
+}
+
+/** Whether the active bubble's gate (if any) is satisfied. */
+function isGateSatisfied(bubble: Bubble | undefined, artifact: ArtifactState): boolean {
+  if (!bubble?.gate) return true
+  if (bubble.gate === 'panels-explored') {
+    return artifact.panelsClicked.length >= 2
+  }
+  return true
+}
+
 export function PrototypeProvider({ children }: { children: ReactNode }) {
   const { lastCompletion, chats, streamCompletion, appendAssistantMessage } = useChatStore()
   const [state, setState] = useState<PrototypeState>(INITIAL_STATE)
   const [hydrated, setHydrated] = useState(false)
 
-  // Mirror of state for use inside side-effecting callbacks. Lets actions
-  // read the latest arc state without re-creating the callback on every
-  // state change (which would otherwise cascade through the memoized store
-  // value and re-render every consumer).
   const stateRef = useRef(state)
   useEffect(() => {
     stateRef.current = state
@@ -216,8 +292,6 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   }, [chats])
 
   useEffect(() => {
-    // Deferred localStorage hydration avoids SSR/client mismatch: initial
-    // render uses INITIAL_STATE both sides; restore happens post-mount.
     const stored = loadFromStorage()
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (stored) setState(stored)
@@ -229,12 +303,23 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
     } catch {
-      // Quota or private-mode failures are non-fatal; the demo just won't survive a reload.
+      /* quota or private-mode failures are non-fatal */
     }
   }, [state, hydrated])
 
   const resetArc = useCallback(() => {
-    setState({ arc: EMPTY_ARC, sidePanel: EMPTY_SIDE_PANEL })
+    // Also clear storage synchronously. React 19 mounts child effects before
+    // parent's, so /new's resetArc fires before PrototypeProvider's
+    // loadFromStorage. Without clearing storage here, the load can reinstate
+    // stale state from a prior session.
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.removeItem(STORAGE_KEY)
+      } catch {
+        /* private mode etc. */
+      }
+    }
+    setState({ arc: EMPTY_ARC })
   }, [])
 
   const fireArc = useCallback((input: FireArcInput) => {
@@ -253,17 +338,10 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
 
   // Observe the chat-store's lastCompletion. When the classifier returns an
   // arc meta and we're not already in an arc, transition idle → choosing.
-  // The guard on arc.beat === 'idle' prevents re-firing if a later beat
-  // (whose meta would normally be { isArc: false } anyway) accidentally emits
-  // isArc: true.
   useEffect(() => {
     if (!lastCompletion) return
     const { meta, chatId, triggerMessageId } = lastCompletion
     if (!meta.isArc || !isConceptId(meta.conceptId)) return
-    // Cross-store sync: chat-store's lastCompletion fires the arc here.
-    // setState-in-effect is intentional — this IS the subscription bridge
-    // between the two stores; only effectful path that mutates arc state
-    // in response to an external observable.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setState((s) => {
       if (s.arc.beat !== 'idle') return s
@@ -290,8 +368,6 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       arc: { ...s.arc, path: 'wrapper', beat: 'wrapper-response' },
     }))
 
-    // Fire the wrapper-response stream. The chat-store commits the result
-    // as a new assistant message in the arc's chat.
     const chat = chatsRef.current.find((c) => c.id === arc.chatId)
     if (!chat) return
     const apiMessages = chat.messages.map((m) => ({ role: m.role, content: m.text }))
@@ -303,316 +379,241 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     })
   }, [streamCompletion])
 
-  const chooseLearn = useCallback(async () => {
+  const chooseLearn = useCallback(() => {
     const { arc } = stateRef.current
     if (!arc.chatId || !arc.conceptId) return
-    const conceptId = arc.conceptId
     const chatId = arc.chatId
-    const concept = getConcept(conceptId)
 
     setState((s) => ({
       ...s,
-      arc: { ...s.arc, path: 'learning', beat: 'predicting' },
+      arc: {
+        ...s.arc,
+        path: 'learning',
+        beat: 'artifact-active',
+        artifact: { ...EMPTY_ARTIFACT },
+      },
     }))
 
-    // Live predict-beat endpoint: framing + options come from tool-use. If
-    // the endpoint fails after retries (or returns an unusable payload), we
-    // degrade to the concept registry's fallback so the arc still advances.
-    let framing = concept.descriptors.fallback.predictionOptions.framing
-    let options: PredictionOption[] = concept.descriptors.fallback.predictionOptions.options
-    try {
-      const res = await fetch('/api/prediction-options', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conceptId }),
-      })
-      if (res.ok && res.body) {
-        const live: { framing?: string; options?: PredictionOption[] } = {}
-        await parseEnvelope(res.body, {
-          onData: (data) => {
-            if (typeof data.framing === 'string') live.framing = data.framing
-            if (Array.isArray(data.options)) live.options = data.options as PredictionOption[]
-          },
-        })
-        if (live.framing && live.options && live.options.length > 0) {
-          framing = live.framing
-          options = live.options
-        }
-      }
-    } catch {
-      // Network/parse errors → keep registry fallback.
-    }
-
-    setState((s) => ({
-      ...s,
-      arc: { ...s.arc, predictionOptions: { framing, options } },
-    }))
-    appendAssistantMessage(chatId, `${framing}\n\n<prediction-options/>`)
+    // Append the assistant message that hosts the <artifact/> tag. No
+    // pre-prose — the bubbles speak. The tag itself is the message.
+    const id = appendAssistantMessage(chatId, '<artifact/>')
+    setState((s) => ({ ...s, arc: { ...s.arc, artifactMessageId: id } }))
   }, [appendAssistantMessage])
 
-  const recordPrediction = useCallback(
-    async (prediction: Prediction) => {
-      const { arc } = stateRef.current
-      if (!arc.chatId || !arc.conceptId) return
-      const chatId = arc.chatId
-      const conceptId = arc.conceptId
-      const concept = getConcept(conceptId)
+  const advanceArtifact = useCallback(() => {
+    setState((s) => {
+      const a = s.arc.artifact
+      if (!a) return s
+      const bubbles = bubblesForStage(a.stage, a.prediction1, a.prediction2)
+      const currentBubble = bubbles[a.bubbleIndex]
 
-      // Resolve the chosen option's metadata (label + misconceptionTag) for
-      // the /api/reveal system prompt so it can name the near-miss explicitly.
-      const liveOptions = arc.predictionOptions?.options
-      const allOptions = liveOptions ?? concept.descriptors.fallback.predictionOptions.options
-      const chosenOption = prediction.optionId
-        ? allOptions.find((o) => o.id === prediction.optionId)
-        : undefined
-      const predictionPayload = {
-        optionId: prediction.optionId,
-        freeText: prediction.freeText,
-        misconceptionTag: chosenOption?.misconceptionTag,
-        predictionLabel: chosenOption?.label,
-      }
+      // Gate check — if the current bubble has an unsatisfied gate, do not
+      // advance. The Artifact UI surfaces the gate state visually.
+      if (!isGateSatisfied(currentBubble, a)) return s
 
-      // 1. Capture prediction, advance to revealing.
-      setState((s) => ({
-        ...s,
-        arc: { ...s.arc, prediction, beat: 'revealing' },
-      }))
-
-      // 2. Stream the reveal. streamCompletion commits the assistant message
-      //    on completion. We deliberately don't pass the chat history — the
-      //    predict-framing message in the history was nudging the model to
-      //    skip the honor-first paragraph and dive straight into "what
-      //    happens." The system prompt already has the concept, the
-      //    prediction, and the misconception tag; the user's original wrapper
-      //    ask is referenced explicitly inside the prompt. Cleaner without
-      //    competing context. If the endpoint fails after retries, fall back
-      //    to the concept registry's static reveal so the arc still advances.
-      let revealText = ''
-      try {
-        const result = await streamCompletion(chatId, {
-          endpoint: '/api/reveal',
-          body: { conceptId, prediction: predictionPayload },
-        })
-        revealText = result.text
-      } catch (err) {
-        if ((err as Error)?.name === 'AbortError') return
-        revealText = concept.descriptors.fallback.reveal
-        appendAssistantMessage(chatId, revealText)
-      }
-
-      // 3. Capture reveal, advance to reflecting.
-      setState((s) => ({
-        ...s,
-        arc: { ...s.arc, reveal: { text: revealText }, beat: 'reflecting' },
-      }))
-
-      // 4. Fetch the live reflection framing in parallel with showing the
-      //    reflect surface. Falls back to the registry on persistent failure.
-      let reflectFraming = concept.descriptors.fallback.reflectionFraming
-      try {
-        const res = await fetch('/api/reflection-framing', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conceptId, revealText }),
-        })
-        if (res.ok && res.body) {
-          const live: { framing?: string } = {}
-          await parseEnvelope(res.body, {
-            onData: (data) => {
-              if (typeof data.framing === 'string') live.framing = data.framing
+      const nextIndex = a.bubbleIndex + 1
+      if (nextIndex < bubbles.length) {
+        const nextBubble = bubbles[nextIndex]
+        return {
+          ...s,
+          arc: {
+            ...s.arc,
+            artifact: {
+              ...a,
+              bubbleIndex: nextIndex,
+              focus: nextBubble.focus ?? a.focus,
+              activeMolecule: nextBubble.molecule ?? a.activeMolecule,
             },
-          })
-          if (live.framing) reflectFraming = live.framing
+          },
         }
-      } catch {
-        // Network/parse error → keep registry fallback.
       }
-
-      setState((s) => ({
-        ...s,
-        arc: { ...s.arc, reflectionFraming: reflectFraming },
-      }))
-
-      // 5. Append reflect prompt + inline <reflection-input/>.
-      appendAssistantMessage(chatId, `${reflectFraming}\n\n<reflection-input/>`)
-    },
-    [appendAssistantMessage, streamCompletion],
-  )
-
-  const recordReveal = useCallback((reveal: { text: string }) => {
-    setState((s) => ({
-      ...s,
-      arc: { ...s.arc, reveal, beat: 'reflecting' },
-    }))
+      // End of current stage — transition.
+      if (a.stage === 'opening') {
+        return { ...s, arc: { ...s.arc, artifact: { ...a, stage: 'predict-1', bubbleIndex: 0 } } }
+      }
+      if (a.stage === 'reveal-1') {
+        return { ...s, arc: { ...s.arc, artifact: { ...a, stage: 'predict-2', bubbleIndex: 0 } } }
+      }
+      if (a.stage === 'reveal-2') {
+        const closing = bubblesForStage('closing', a.prediction1, a.prediction2)
+        return {
+          ...s,
+          arc: {
+            ...s.arc,
+            beat: 'artifact-resolved',
+            artifact: {
+              ...a,
+              stage: 'closing',
+              bubbleIndex: 0,
+              focus: closing[0]?.focus ?? a.focus,
+              activeMolecule: closing[0]?.molecule ?? a.activeMolecule,
+            },
+          },
+        }
+      }
+      // closing — stay put. user clicks "close" explicitly.
+      return s
+    })
   }, [])
 
-  const recordReflection = useCallback(
-    async (reflection: { text: string }) => {
-      const { arc } = stateRef.current
-      if (!arc.chatId || !arc.conceptId) return
-      const chatId = arc.chatId
-      const conceptId = arc.conceptId
-      const concept = getConcept(conceptId)
-
-      setState((s) => ({
+  const retreatArtifact = useCallback(() => {
+    setState((s) => {
+      const a = s.arc.artifact
+      if (!a || a.bubbleIndex === 0) return s
+      const bubbles = bubblesForStage(a.stage, a.prediction1, a.prediction2)
+      const prevIndex = a.bubbleIndex - 1
+      const prevBubble = bubbles[prevIndex]
+      return {
         ...s,
-        arc: { ...s.arc, reflection, beat: 'card-ready' },
-      }))
-
-      // 1. Fetch the card meta (framing + canonical conceptTitle). Falls back
-      //    to the registry on persistent failure.
-      let framing = concept.descriptors.fallback.cardMeta.framing
-      let conceptTitle = concept.descriptors.fallback.cardMeta.conceptTitle
-      try {
-        const res = await fetch('/api/card-meta', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conceptId, reflectionText: reflection.text }),
-        })
-        if (res.ok && res.body) {
-          const live: { framing?: string; conceptTitle?: string } = {}
-          await parseEnvelope(res.body, {
-            onData: (data) => {
-              if (typeof data.framing === 'string') live.framing = data.framing
-              if (typeof data.conceptTitle === 'string') live.conceptTitle = data.conceptTitle
-            },
-          })
-          if (live.framing) framing = live.framing
-          if (live.conceptTitle) conceptTitle = live.conceptTitle
-        }
-      } catch {
-        // Network/parse error → keep registry fallback.
+        arc: {
+          ...s.arc,
+          artifact: {
+            ...a,
+            bubbleIndex: prevIndex,
+            focus: prevBubble.focus ?? a.focus,
+            activeMolecule: prevBubble.molecule ?? a.activeMolecule,
+          },
+        },
       }
+    })
+  }, [])
 
-      setState((s) => ({
-        ...s,
-        arc: { ...s.arc, cardMeta: { framing, conceptTitle } },
-      }))
-
-      // 2. Commit the card framing + inline <reflection-card/>.
-      appendAssistantMessage(chatId, `${framing}\n\n<reflection-card/>`)
-
-      // 3. Stream the post-card continuation — the wrapper Claude promised
-      //    when the user took the learning path. Uses /api/wrapper-response
-      //    with afterLearning=true so the prompt skips re-explaining the
-      //    concept and bridges directly to the code.
-      //
-      //    We pass ONLY the user's original trigger message (the first user
-      //    turn). Passing the full history would end the conversation on an
-      //    assistant turn (the card), which Anthropic rejects for non-prefill
-      //    models — and the system prompt with afterLearning=true already
-      //    carries the context the model needs.
-      const chat = chatsRef.current.find((c) => c.id === chatId)
-      const firstUserMessage = chat?.messages.find((m) => m.role === 'user')
-      const apiMessages = firstUserMessage
-        ? [{ role: 'user' as const, content: firstUserMessage.text }]
-        : []
-      streamCompletion(chatId, {
-        endpoint: '/api/wrapper-response',
-        body: { conceptId, messages: apiMessages, afterLearning: true },
-      }).catch(() => {
-        /* already logged in chat-store; arc state remains card-ready */
+  const recordPrediction1 = useCallback(
+    (input: { optionId?: string; freeText?: string }) => {
+      setState((s) => {
+        const a = s.arc.artifact
+        if (!a) return s
+        const tag: MisconceptionKey = input.optionId
+          ? pickMisconceptionFromOption(input.optionId)
+          : input.freeText
+            ? classifyFreeText(input.freeText)
+            : 'unclassified'
+        const prediction1: ArtifactPrediction = {
+          optionId: input.optionId,
+          freeText: input.freeText,
+          misconceptionTag: tag,
+        }
+        const reveal1 = PATHS[tag].reveal1
+        const first = reveal1[0]
+        return {
+          ...s,
+          arc: {
+            ...s.arc,
+            artifact: {
+              ...a,
+              prediction1,
+              stage: 'reveal-1',
+              bubbleIndex: 0,
+              focus: first?.focus ?? a.focus,
+              activeMolecule: first?.molecule ?? a.activeMolecule,
+            },
+          },
+        }
       })
     },
-    [appendAssistantMessage, streamCompletion],
+    [],
   )
 
-  const markCardReady = useCallback(() => {
-    setState((s) => ({ ...s, arc: { ...s.arc, beat: 'card-ready' } }))
-  }, [])
+  const recordPrediction2 = useCallback(
+    (input: { optionId?: string; freeText?: string }) => {
+      setState((s) => {
+        const a = s.arc.artifact
+        if (!a) return s
+        const followUp = followUpFor(a.prediction1)
+        const opt = input.optionId ? followUp.options.find((o) => o.id === input.optionId) : null
+        const tag: MisconceptionKey =
+          opt?.misconceptionTag ?? a.prediction1?.misconceptionTag ?? 'unclassified'
+        const prediction2: ArtifactPrediction = {
+          optionId: input.optionId,
+          freeText: input.freeText,
+          misconceptionTag: tag,
+        }
+        const key = a.prediction1?.misconceptionTag ?? 'unclassified'
+        const followUpId = input.optionId ?? Object.keys(PATHS[key].reveal2)[0]
+        const reveal2 = PATHS[key].reveal2[followUpId] ?? []
+        const first = reveal2[0]
+        return {
+          ...s,
+          arc: {
+            ...s.arc,
+            artifact: {
+              ...a,
+              prediction2,
+              stage: 'reveal-2',
+              bubbleIndex: 0,
+              focus: first?.focus ?? a.focus,
+              activeMolecule: first?.molecule ?? a.activeMolecule,
+            },
+          },
+        }
+      })
+    },
+    [],
+  )
 
-  const endExchange = useCallback(() => {
-    setState((s) => ({ ...s, arc: { ...s.arc, beat: 'exchange-ended' } }))
-  }, [])
+  const closeArtifact = useCallback(() => {
+    const { arc } = stateRef.current
+    if (!arc.chatId || !arc.conceptId) return
+    const chatId = arc.chatId
+    const conceptId = arc.conceptId
 
-  const openCard = useCallback(() => {
     setState((s) => ({
       ...s,
-      arc: { ...s.arc, beat: 'map-open' },
-      sidePanel: { open: true, view: 'map' },
+      arc: { ...s.arc, beat: 'wrapper-followup' },
     }))
 
-    // Fire-and-forget the ghost-nodes fetch. The MapView reads from
-    // arc.ghostNodes when set; the registry fallback covers the moment between
-    // open and the live result landing. Side panel transition is 250ms; this
-    // fetch typically lands well after.
-    const { arc } = stateRef.current
-    if (!arc.conceptId) return
-    const conceptId = arc.conceptId
-    const reflectionText = arc.reflection?.text ?? ''
-    void (async () => {
-      try {
-        const res = await fetch('/api/ghost-nodes', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conceptId, reflectionText }),
-        })
-        if (!res.ok || !res.body) return
-        let live: GhostNode[] | null = null
-        await parseEnvelope(res.body, {
-          onData: (data) => {
-            if (Array.isArray(data.ghosts)) {
-              const ghosts = data.ghosts as GhostNode[]
-              // Need at least 4 to fill the cardinal positions; up to 6 fills
-              // both cardinals + diagonals. Below 4, fall back to the registry.
-              if (ghosts.length >= 4) live = ghosts.slice(0, 6)
-            }
+    // Stream the post-artifact follow-up message. Reuses /api/wrapper-response
+    // with afterLearning=true so the prompt skips re-explaining the concept
+    // and instead offers to look at sp²/sp hybridization or another molecule.
+    //
+    // Pass ONLY the user's original trigger message — the artifact lived
+    // outside the regular chat history and the system prompt already carries
+    // the context the model needs.
+    const chat = chatsRef.current.find((c) => c.id === chatId)
+    const firstUserMessage = chat?.messages.find((m) => m.role === 'user')
+    const apiMessages = firstUserMessage
+      ? [{ role: 'user' as const, content: firstUserMessage.text }]
+      : []
+    streamCompletion(chatId, {
+      endpoint: '/api/wrapper-response',
+      body: { conceptId, messages: apiMessages, afterLearning: true },
+    }).catch(() => {
+      /* already logged in chat-store */
+    })
+  }, [streamCompletion])
+
+  const toggleChip = useCallback((key: ChipKey) => {
+    setState((s) => {
+      const a = s.arc.artifact
+      if (!a) return s
+      return {
+        ...s,
+        arc: {
+          ...s.arc,
+          artifact: {
+            ...a,
+            chipState: { ...a.chipState, [key]: !a.chipState[key] },
           },
-        })
-        if (live) {
-          setState((s) => ({ ...s, arc: { ...s.arc, ghostNodes: live } }))
-        }
-      } catch {
-        /* Network/parse failure → MapView keeps the registry fallback. */
+        },
       }
-    })()
+    })
   }, [])
 
-  const enterWorkshop = useCallback(() => {
-    setState((s) => ({
-      ...s,
-      arc: { ...s.arc, beat: 'workshop-open' },
-      sidePanel: { open: true, view: 'workshop' },
-    }))
-
-    // Fire-and-forget the workshop-opening framing fetch. The WorkshopView
-    // reads from arc.workshopOpening when set; registry fallback covers the
-    // moment between view-switch and live result.
-    const { arc } = stateRef.current
-    if (!arc.conceptId) return
-    const conceptId = arc.conceptId
-    void (async () => {
-      try {
-        const res = await fetch('/api/workshop-opening', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conceptId }),
-        })
-        if (!res.ok || !res.body) return
-        let liveFraming: string | null = null
-        await parseEnvelope(res.body, {
-          onData: (data) => {
-            if (typeof data.framing === 'string') liveFraming = data.framing
-          },
-        })
-        if (liveFraming) {
-          setState((s) => ({
-            ...s,
-            arc: { ...s.arc, workshopOpening: { framing: liveFraming! } },
-          }))
-        }
-      } catch {
-        /* WorkshopView keeps the registry fallback. */
+  const clickPanel = useCallback((id: RepresentationPanelId) => {
+    setState((s) => {
+      const a = s.arc.artifact
+      if (!a) return s
+      // Track unique clicks (so the gate registers exploration, not repeat
+      // clicks on the same panel).
+      const already = a.panelsClicked.includes(id)
+      const panelsClicked = already ? a.panelsClicked : [...a.panelsClicked, id]
+      // Toggle annotation mode: clicking the active panel deactivates it.
+      const activePanel = a.activePanel === id ? null : id
+      return {
+        ...s,
+        arc: { ...s.arc, artifact: { ...a, panelsClicked, activePanel } },
       }
-    })()
-  }, [])
-
-  const setSidePanel = useCallback((next: Partial<SidePanelState>) => {
-    setState((s) => ({ ...s, sidePanel: { ...s.sidePanel, ...next } }))
-  }, [])
-
-  const closeSidePanel = useCallback(() => {
-    setState((s) => ({ ...s, sidePanel: { ...s.sidePanel, open: false } }))
+    })
   }, [])
 
   const value = useMemo<PrototypeStore>(
@@ -622,15 +623,13 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       fireArc,
       chooseWrapper,
       chooseLearn,
-      recordPrediction,
-      recordReveal,
-      recordReflection,
-      markCardReady,
-      endExchange,
-      openCard,
-      enterWorkshop,
-      setSidePanel,
-      closeSidePanel,
+      advanceArtifact,
+      retreatArtifact,
+      recordPrediction1,
+      recordPrediction2,
+      closeArtifact,
+      toggleChip,
+      clickPanel,
     }),
     [
       state,
@@ -638,15 +637,13 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       fireArc,
       chooseWrapper,
       chooseLearn,
-      recordPrediction,
-      recordReveal,
-      recordReflection,
-      markCardReady,
-      endExchange,
-      openCard,
-      enterWorkshop,
-      setSidePanel,
-      closeSidePanel,
+      advanceArtifact,
+      retreatArtifact,
+      recordPrediction1,
+      recordPrediction2,
+      closeArtifact,
+      toggleChip,
+      clickPanel,
     ],
   )
 

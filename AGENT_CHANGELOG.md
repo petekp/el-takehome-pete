@@ -10,18 +10,146 @@
 > - `docs/KICKOFF.md` — build sequencing + decisions made at kickoff
 > - `docs/exercise-brief.md` — original take-home brief
 
-## Current state (2026-05-13)
+## Current state (2026-05-14)
 
-The prototype ships the full affordance arc end-to-end: trigger → affordance
-→ predict → reveal → reflect → inline card → map → workshop. All 7 beats
-have live Anthropic endpoints with registry fallbacks. The workshop is a
-real interactive Promise.all timeline; the map is a Claude-logomark spark
-with 6 surrounding concept pills. PRD §4's two-column workshop is now
-honored via a view-aware side panel width.
+The prototype consolidates around a single inline **interactive explainer**
+(formerly "workshop") that lives in the chat thread. The arc:
+
+  trigger → affordance → (just write it OR explainer) → wrapper code.
+
+Inside the explainer: two prediction beats with branching follow-ups, a
+reactive Promise.all visualization with focus states, JRPG-style click-to-
+advance speech bubbles, and a "go deeper" resources finale that points
+out to MDN. The explainer is the moment. Everything else exists to serve
+it.
+
+Cut surfaces (used to ship; now gone): map view, reflection beat, ghost-
+node concept network, the side panel as a separate surface, the
+"workshop" as a parallel surface to the chat. See **Deviations → Pivot to
+inline explainer** for full rationale.
 
 ---
 
 ## Deviations
+
+### Pivot to inline explainer (2026-05-14)
+
+**Spec (KICKOFF + PRD):** Full affordance arc with separate map, workshop,
+and reflection beats; structured exchange ends with an inline card, the
+user opens it to enter the map (concept network), then clicks the central
+concept to enter the workshop. Seven distinct beats; the workshop and map
+live in a side panel adjacent to the chat.
+
+**Now:** One consolidated artifact. The arc is:
+
+1. User sends the canonical trigger ("Promise.all keeps hanging…").
+2. Claude responds with two beats of warm prose: "I can write that wrapper,
+   but there's a thing about Promise.all worth a minute first. Want to
+   look at it, or should I just write it?"
+3. Two buttons: "just write the wrapper" / "let's look at it first".
+4. Wrapper path is unchanged from the prior build.
+5. Learning path commits an `<artifact/>` tag as the next assistant
+   message. AssistantBody swaps the tag for an inline interactive
+   explainer that fills the chat content width.
+6. Inside the explainer: two prediction beats, three options each plus
+   free-text, with bubbles narrating the viz. Each wrong answer routes
+   to a misconception-specific focus state and bubble path; right answers
+   extend the model toward composition. Closes with a single bubble +
+   "go deeper" MDN resources panel.
+7. User closes the explainer ("OK — write the wrapper"). Claude's next
+   chat message bridges back to the original task and delivers the
+   wrapper code (race against a timer + AbortController + try/catch).
+
+**Cuts:**
+
+- `MapView`, `WorkshopView`, `WorkshopChat`, `ReflectionCard`,
+  `ReflectionInput`, `SidePanel` — deleted.
+- `/api/workshop-opening`, `/api/workshop-chat`, `/api/reflection-framing`,
+  `/api/card-meta`, `/api/ghost-nodes` — deleted.
+- `PrototypeStore` simplified: `arc.beat` collapses to `idle | choosing |
+  wrapper-response | artifact-active | artifact-resolved | wrapper-followup`.
+  No more reflect / card / map / workshop beats. Side panel state is gone.
+- Concept registry slimmed dramatically: just `triggerCriteria` + `title`
+  + the affordance copy. All other content (prediction options,
+  misconception branches, bubble copy, resources) moved to
+  `src/lib/artifact-script.ts`, authored as the load-bearing piece of
+  the prototype.
+
+**Why:**
+
+The prior arc had too many surfaces for a single learning moment. The map
+and workshop were two parallel learning gestures; the reflection beat
+asked the user to summarize, but the explanation hadn't actually landed
+yet (it had been _delivered_, not _absorbed_). Consolidating around the
+explainer puts all craft into the one moment that matters: the user has a
+mental model of Promise.all, we triangulate where it diverges from reality,
+and we reshape the explanation around that gap.
+
+The triangulation move is the prototype's distinctive epistemic claim:
+each prediction is a bearing on the user's model; each wrong answer maps
+to a structurally distinct misconception; the visualization REACTS by
+foregrounding the part of the mechanic that specific misconception
+misunderstood, then reconnects to the user's original problem.
+
+**Misconception authoring** is the craft work. The three prediction-1
+options are not strawmen — they map to:
+
+- `truth`: Promise.all is all-or-nothing.
+- `allSettled`: assuming Promise.all returns partial results (that's
+  actually Promise.allSettled's behavior).
+- `timeout`: assuming JavaScript has a built-in timeout on promises (it
+  doesn't).
+
+Each branch has its own reveal-1 bubble script that honors the user's
+prior thinking before showing where it diverges. Follow-up (prediction-2)
+narrows further within the same misconception. The visualization plays
+through `frame → (mental-model brief) → truth-revealed → race-composition`
+focus states keyed off these branches.
+
+**Touched (added/major):**
+
+- `src/lib/artifact-script.ts` — new. The misconception model, bubble
+  scripts, prediction options, and resources.
+- `src/lib/concepts.ts` — slimmed to just triggerCriteria + title +
+  affordance copy.
+- `src/lib/prototype-store.tsx` — full rewrite around artifact stages.
+- `src/components/prototype/Artifact.tsx` — new. The shell.
+- `src/components/prototype/ArtifactViz.tsx` — new. Three tracks, aggregate
+  row, racer lane, mental-model ghost overlays. raf-driven per-focus
+  animations.
+- `src/components/prototype/ArtifactPanel.tsx` — new. Sidebar entry that
+  scrolls the artifact into view.
+- `src/components/chat/AssistantBody.tsx` — recognizes `<artifact/>`.
+- `src/app/chat/[chatId]/page.tsx` — removed SidePanel; added message-id
+  scroll targets.
+- `src/app/shell.tsx` — added ArtifactPanel into the sidebar.
+- `src/app/api/chat/route.ts` — warmer affordance system prompt.
+- `src/app/api/wrapper-response/route.ts` — post-artifact bridging copy
+  unchanged in behavior, still uses `afterLearning=true`.
+
+**Touched (deleted):**
+
+`src/components/prototype/{MapView,WorkshopView,WorkshopChat,
+ReflectionCard,ReflectionInput,SidePanel,PredictionOptions}.tsx`,
+`src/app/api/{workshop-opening,workshop-chat,reflection-framing,
+card-meta,ghost-nodes}/route.ts`, `src/app/debug/page.tsx`.
+
+**Open follow-ups:**
+
+- The bubble script is hand-authored, not LLM-generated. This is
+  deliberate (the misconceptions are the craft and need to be tight) but
+  also means the prediction options inside the artifact are not currently
+  driven by `/api/prediction-options`. That endpoint still exists; it's
+  unused by the artifact but kept for reference.
+- The mental-model ghost overlays (allSettled / timeout) are simple
+  fade-in-then-out labels. A more elaborate visual could stage the
+  ghost behavior in the viz itself (e.g., a phantom aggregate marker
+  that fades). Worth doing once the misconception model is validated.
+- The "unclassified" free-text path routes through the truth branch's
+  follow-up + reveal2. Heuristic classifier is keyword-based; could swap
+  for an LLM call later.
+
+---
 
 ### Map panel header reframed in notebook voice
 

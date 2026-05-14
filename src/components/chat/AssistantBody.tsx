@@ -1,47 +1,24 @@
 import { Streamdown, type AllowedTags, type Components } from 'streamdown'
 import { cn } from '@/lib/utils'
-import {
-  AffordanceButtons,
-  PredictionOptions,
-  ReflectionCard,
-  ReflectionInput,
-} from '@/components/prototype'
+import { AffordanceButtons, Artifact } from '@/components/prototype'
 import { ClaudeHeading, ClaudeList, ClaudeListItem, ClaudeParagraph } from './ClaudeMessage'
 
 /**
- * Inline arc components: the server's beat-aware prompts instruct Claude to
- * emit these tags at the right points; Streamdown swaps them for real React
- * components that read PrototypeState. Self-closing, no attributes (state
- * comes from PrototypeProvider, not the markup).
+ * Inline arc components. The trigger response emits <affordance/>; the
+ * learning path commits a message that's just <artifact/>. Streamdown swaps
+ * the tags for the real React components, which read PrototypeState.
  */
 const ARC_TAGS: AllowedTags = {
   affordance: [],
-  'prediction-options': [],
-  'reflection-input': [],
-  'reflection-card': [],
+  artifact: [],
 }
 
 type AssistantBodyProps = {
   text: string
-  /**
-   * True for the live stream buffer; false for committed messages.
-   */
   isStreaming?: boolean
 }
 
-/**
- * Renders assistant text as Markdown via Streamdown — purpose-built for AI
- * chat: incremental-parse-safe, smooth animations during stream, and (via
- * allowedTags) a path for the assistant to emit inline interactive elements
- * directly in the prose.
- *
- * Top-level elements map to our Claude* typographic primitives so spacing,
- * weights, and tokens stay consistent with the rest of the chat surface.
- */
 export function AssistantBody({ text, isStreaming = false }: AssistantBodyProps) {
-  // Caret rides on top of the streamed text. Gating isAnimating on text
-  // presence keeps the caret out of empty space pre-first-character —
-  // SparkIndicator covers the "thinking, not typing yet" moment instead.
   const hasText = text.length > 0
   return (
     <Streamdown
@@ -78,8 +55,6 @@ const MARKDOWN_COMPONENTS: Components = {
       {children}
     </a>
   ),
-  // Streamdown exposes inlineCode as a virtual component name so inline and
-  // fenced code can be styled independently without className-sniffing.
   inlineCode: ({ children }) => (
     <code className="bg-state-pill rounded-xs px-1 py-0.5 font-mono text-[0.9em]">
       {children}
@@ -100,7 +75,5 @@ const MARKDOWN_COMPONENTS: Components = {
   ),
   hr: () => <hr className="border-border-soft my-2" />,
   affordance: () => <AffordanceButtons />,
-  'prediction-options': () => <PredictionOptions />,
-  'reflection-input': () => <ReflectionInput />,
-  'reflection-card': () => <ReflectionCard />,
+  artifact: () => <Artifact />,
 }

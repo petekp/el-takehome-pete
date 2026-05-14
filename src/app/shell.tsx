@@ -7,6 +7,7 @@ import {
   SidebarNavItem,
   SidebarSection,
 } from '@/components/chat'
+import { ArtifactPanel } from '@/components/prototype'
 import { useChatStore } from '@/lib/chat-store'
 import { cn } from '@/lib/utils'
 import { Folder, Plus } from 'lucide-react'
@@ -47,6 +48,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           <SidebarNavItem href="/new" icon={Plus} label="New chat" />
           <SidebarNavItem href="/projects" icon={Folder} label="Projects" />
         </SidebarNav>
+
+        <div className="group-data-[collapsed]/sidebar:hidden">
+          <ArtifactPanel />
+        </div>
 
         {chats.length > 0 && (
           <SidebarSection label="Recents">
