@@ -150,6 +150,9 @@ const PROMISE_ALL: Concept = {
         framing: 'Got it. Kept this for you:',
       },
       ghostNodes: [
+        // First four are the "cardinal" ghosts (long rays in the spark shape) —
+        // the most direct neighbors. The two below are the "diagonal" ghosts
+        // (shorter rays) — supporting context that rounds out the neighborhood.
         {
           id: 'allSettled',
           label: 'Promise.allSettled',
@@ -169,6 +172,16 @@ const PROMISE_ALL: Concept = {
           id: 'unhandled',
           label: 'Unhandled rejections',
           hint: "The flip side of all-or-nothing: if one promise rejects and you don't catch it, Promise.all rejects immediately and the others keep running in the background.",
+        },
+        {
+          id: 'any',
+          label: 'Promise.any',
+          hint: 'The third sibling — settles on the first SUCCESS, ignoring rejections until everything fails.',
+        },
+        {
+          id: 'tryCatch',
+          label: 'try/catch with promises',
+          hint: "Why your original instinct didn't help here — try/catch only fires when there's something to catch, and a hung promise never throws.",
         },
       ],
       workshopOpening: {

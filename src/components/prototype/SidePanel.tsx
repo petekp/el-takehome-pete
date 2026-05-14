@@ -68,14 +68,24 @@ function PanelHeader({
   conceptId: ConceptId | null
   onClose: () => void
 }) {
-  const title = conceptId ? getConcept(conceptId).descriptors.title : 'Your map'
   return (
-    <div className="border-border-soft flex items-center justify-between border-b px-6 py-4">
+    <div className="border-border-soft flex items-start justify-between gap-4 border-b px-6 py-4">
       <div className="min-w-0">
-        <div className="text-text-tertiary text-xs uppercase tracking-wide">
-          {view === 'workshop' ? 'Workshop' : 'Your map'}
-        </div>
-        <h2 className="text-text-primary truncate text-base font-medium">{title}</h2>
+        {view === 'workshop' ? (
+          <>
+            <div className="text-text-tertiary text-xs uppercase tracking-wide">Workshop</div>
+            <h2 className="text-text-primary truncate text-base font-medium">
+              {conceptId ? getConcept(conceptId).descriptors.title : 'Workshop'}
+            </h2>
+          </>
+        ) : (
+          <>
+            <h2 className="text-text-primary font-serif text-base leading-tight">Your map</h2>
+            <p className="text-text-tertiary mt-1 text-xs leading-snug">
+              Concepts you&rsquo;ve explored with Claude collect here.
+            </p>
+          </>
+        )}
       </div>
       <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close panel">
         <X className="size-4" />

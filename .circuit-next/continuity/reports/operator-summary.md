@@ -1,47 +1,34 @@
 # Circuit Handoff
 
-Source: pending_record
-Record: continuity-bf70a1a8-31a9-4436-adb4-1fd327ae7125
+Source: saved continuity record
+Record: continuity-2e41160f-094f-4983-bb91-6a57fe10fabc
 Kind: standalone
 
 ## Goal
-Polish the map and especially the workshop surfaces of the in-context learning affordance prototype. Workshop currently captures the mechanics but feels bland — does not yet land the ambition of the original vision (manipulable Promise.all timeline as a real exploration space). Start the next session with the workshop, then come back to map polish.
+Continue refining the map. The spark/asterisk layout is in place — central solid "Promise.all" pill + 4 cardinal ghost pills + 2 diagonal pills + 2 decorative ray tips. Now polish for production: ray weights, pill sizing/positioning, hover/interaction states, edge-case label fit.
 
 ## Next Action
-Open WorkshopView (src/components/prototype/WorkshopView.tsx) with the user in a fresh session. Discuss what the original vision was for the workshop — per PRD §4 / KICKOFF Step 5: per-track outcome pickers (resolve/reject/hang at configurable times), preset scenario buttons ("all resolve" / "one rejects" / "one hangs" / "two reject staggered"), Motion-driven aggregate Promise.all animation that visibly settles or pulses based on the configuration, and the opening predict-reveal where the reveal plays out IN the viz rather than as a text bubble below. Sketch directions together, then implement. Consider widening the side panel to ~720px for workshop view to enable the PRD-spec two-column layout (left viz, right chat). After workshop polish: return to map polish — halo treatment, ghost-node placement, hint animation.
+Open MapView.tsx with the user. Walk through what landed (pills replacing circles, spark rays evoking the Claude logomark, 6 ghosts cardinal+diagonal). Then pick up polish in this rough order: (1) tune cardinal ray weight — they read subtle at strokeWidth 1.5 / opacity 0.45 against the cream page, maybe push to 0.6-0.7 or add a slight glow; (2) verify "try/catch with promises" pill (22 chars, longest label) doesn't overflow the map left edge at production 480px panel width — check live in /debug Side panel demo and /new arc walk; (3) consider widening diagonal-pill spacing — NE pill (Promise.any) sits visually close to E pill (Promise.race) at production size; (4) hover treatment on ghost pills could be richer (subtle scale, ray highlight); (5) reduced-motion handling; (6) the decorative NW/SE ray tips could be slightly more prominent. Defer KICKOFF Step 7 (workshop chrome: spaced-rep chip + overflow menu) until map polish lands. Append any deviations to AGENT_CHANGELOG.md.
 
 ## State
-- Working dir: /Users/petepetrash/Code/anthropic/education-labs-takehome-main. Next.js 16, React 19, Tailwind v4, @anthropic-ai/sdk wired, pnpm package manager.
-- Build + lint clean (3 pre-existing <img> warnings out of scope).
-- Dev server typically on :3001. ANTHROPIC_API_KEY in .env.local.
-- KICKOFF Build Step 4 fully shipped — all 7 beats now have live endpoints with NDJSON envelope + Anthropic tool-use + exp backoff via withBackoff (Sonnet 4.6 for prose, Haiku 4.5 for classifier):
-  - /api/chat (server-side classifier + affordance prose)
-  - /api/prediction-options (data: framing + 3 calibrated options with misconceptionTag truth/allSettled/default-timeout)
-  - /api/reveal (streamed: honor-first → name near-miss explicitly → close loop on wrapper task; system prompt enforces ordering)
-  - /api/reflection-framing (data: framing line drawing from reveal, ends "or something else that stuck")
-  - /api/card-meta (data: framing line + canonical conceptTitle verbatim from registry)
-  - /api/ghost-nodes (data: 4 adjacent-concept entries with invitational hints)
-  - /api/workshop-opening (data: framing line that orients + names viz configuration)
-  - /api/workshop-chat (streamed: concept-aware, has user reflection in context, fresh thread)
-  - /api/wrapper-response with afterLearning: true for the post-card "Now — about your wrapper…" continuation
-- Predict surface upgraded to PRD §3.2: "Your prediction · 1 of 2" header + End button, numbered option rows with circular badges, free-text textarea ("Answer in your own words…") with Enter-to-submit.
-- "End" button on predict/reflect transitions to new "exchange-ended" beat that suppresses downstream beats but preserves the affordance choice pill on the prior message (PrototypeStore.endExchange action).
-- Faded "Your prediction · submitted" surface renders in the predict message after submission (PRD §3.3).
-- Reflection surface has "Your take" header + End button; placeholder "In your own words…"; Skip + Add to notes (PRD §9 decisions committed: Your take + Add to notes).
-- Inline card matches PRD §3.4: lit-asterisk icon (spark-idle.svg) on left, serif conceptTitle, "concept from this conversation" secondary line, ArrowUpRight Open affordance, max-w-[460px], notecard not interface.
-- Map: warm radial halo behind central solid node, 4 dashed ghost nodes (live labels + hints from API, registry fallback when API degrades), 12 atmospheric outer-ring dots. Ghost click toggles inline hint banner below the SVG.
-- Workshop: chrome bar with back-to-map + serif concept title, live opening framing (registry fallback), same prediction primitive as chat exchange (options reused from arc.predictionOptions), three-track timeline viz STUB (fetch A/B resolved at 200ms, fetch C hanging, Promise.all aggregate "never settles"), inline workshop reveal text after prediction submit, real workshop chat panel at bottom with own composer + streaming (WorkshopChat component, fresh thread).
-- Component debug page at /debug renders every prototype component in every meaningful state side-by-side. Uses mock PrototypeStores via exported PrototypeContext + buildMockStore. Scroll fix: uses scroll-area h-full overflow-y-auto since shell pins each route at h-dvh.
-- PrototypeStore state grew to carry: predictionOptions, reveal, reflectionFraming, reflection, cardMeta, ghostNodes, workshopOpening. All flow live API → state, with registry fallback as graceful degrade.
+- Working dir: /Users/petepetrash/Code/anthropic/education-labs-takehome-main. Next.js 16, React 19, Tailwind v4, pnpm. Dev server typically on :3001.
+- Build + lint clean (3 pre-existing <img> warnings unchanged, out of scope).
+- WorkshopView fully shipped per KICKOFF Step 5: configurable per-track outcome pickers (R/✕/∞), preset chips (Two resolve · one hangs / All resolve / One rejects / Two reject · staggered), raf-driven Play animation (1.6s wall-clock with quadratic ease-out, 1.25× overshoot for hangs), aggregate row at top with state caption, inner-container inset visually wrapping the fetches per Promise.all([…]) code metaphor. Collapsed slider — native input is transparent + a11y/drag, custom marker on top owns visuals. Predict-submit auto-plays the truth scenario.
+- SidePanel widened to 800px when view=workshop (480 for map). View-aware width with 250ms transition.
+- Workshop two-column layout at 800px: 3fr viz / 2fr chat (chat column hosts opening framing + WorkshopPredict + reveal caption + WorkshopChat).
+- Concept rolled up: promise-all-hang → promise-all, title "Promise.all" (was "How Promise.all handles a hanging promise"). Defensive guard in loadFromStorage drops arcs with unknown concept ids.
+- MapView fully rewritten: removed halo + atmospheric dots, replaced circles with HTML pills, arranged in Claude-logomark spark layout. 6 ghost pills (4 cardinal at N/E/S/W + 2 diagonal at NE/SW) with SVG rays radiating from center. 2 decorative rays at NW/SE with small dot tips (no labels) for the asymmetric burst silhouette.
+- 6 ghost nodes in registry (added Promise.any + try/catch with promises). API ghost-nodes bumped to minItems/maxItems 6; system prompt coaches cardinal-then-diagonal tier ordering. prototype-store slice → 6.
+- AGENT_CHANGELOG.md created at repo root tracking deviations from PRD/KICKOFF, grouped by surface (concept, workshop, map). Project memory saved noting this convention.
 
 ## Debt
-- Workshop viz is a static stub: fetch A/B/C are hardcoded as two-resolving-one-hanging. No per-track outcome pickers (resolve/reject/hang at configurable times), no preset scenario buttons, no Motion-driven aggregate animation. KICKOFF Step 5 territory. THIS IS THE PRIMARY BLAND-NESS the user wants to address.
-- Workshop opening reveal plays out as a text bubble ("Watch the bottom track — the aggregate keeps waiting") rather than IN THE VIZ as animation (per PRD §4: "the reveal plays out in the visualization — the configuration animates or updates to show what actually happens"). This is the core missed-ambition gap.
-- Workshop chrome incomplete: missing spaced-rep chip with stubbed schedule confirmation (PRD §4, KICKOFF Step 7) and overflow menu with "Your notes" (editable reflection) + "Remove from map" (destructive with confirmation).
-- Workshop layout is single-column inside 480px panel. PRD §4 specifies two-column (left viz / right chat). Consider widening side panel to ~720px when view=workshop, OR keep single-column as a deliberate 480px compromise. SidePanel.tsx currently fixed at w-[480px].
-- Map polish remaining (KICKOFF Step 6): halo treatment could be warmer/more lantern-like; ghost-node positions are hand-placed in 4 corners — could feel more atmospheric/intentional; atmospheric outer dots use hand-placed coordinates; ghost-hint animation/transition not yet styled.
-- Accessibility pass (KICKOFF Step 8) outstanding: arrow-key nav on prediction options, focus management between surfaces, ARIA roles (radiogroup for predict options, dialog/complementary on side panel verified, button on map nodes), accessible alternative for viz dynamic state.
-- Pre-existing chat-hydration race: reloading a /chat/[id] URL bounces to /new because the route effect checks !chat before chat-store finishes hydrating from localStorage. Not a blocker but flagged.
-- PRD §9 still unresolved: spaced-rep chip wording (deferred — chip not built), global-nav naming (deferred until copy needs it).
-- Lint warnings: 3 pre-existing <img> warnings (Greeting, SparkIndicator, ReflectionCard). Out of scope per handoff brief.
-- KICKOFF Step 9 (ship prep) outstanding: Vercel preview deploy, ≤8 min screen-recorded walkthrough, short design rationale doc.
+- Cardinal map rays at strokeWidth 1.5 / opacity 0.45 read subtle against the cream bg-page. Bumping opacity or adding a slight inner glow could make the spark more legibly Claude-mark-like.
+- "try/catch with promises" is the longest ghost label (22 chars including space). At SW position (CX-100, CY+100) the pill may overflow the left edge of the map container at production 480px panel width. Hasn't been verified live in the actual chat→map arc — needs the API to return 6 ghosts AND the map to render at 432px (the panel content area). Debug Side panel demo at /debug bottom is the closest test.
+- NE diagonal pill (Promise.any) sits visually close to E cardinal pill (Promise.race) at production size — even though geometric distances differ, the pill widths bring them near. Consider pushing diagonals slightly further out (e.g., +20px from center) OR rotating diagonal angles a few degrees off-45° for asymmetry that matches the Claude mark more faithfully.
+- Hover treatment on ghost pills currently just shifts border + text color. Could include subtle scale (1.02) and possibly highlight the connecting ray to communicate the conceptual link.
+- Decorative ray tips at NW/SE are very subtle (opacity 0.35, r=2.5). Could be slightly more prominent — or could rotate angles for irregularity, since the Claude mark has rays at non-45° angles.
+- No reduced-motion handling on the workshop Play animation or the central-pill hover-scale.
+- KICKOFF Step 7 (workshop chrome): spaced-rep chip with stubbed schedule confirmation + overflow menu with "Your notes" (editable reflection) + "Remove from map" (destructive with confirmation). Outstanding.
+- KICKOFF Step 8 (a11y pass): arrow-key nav on prediction options, focus management between surfaces, ARIA roles audit, accessible alternative for viz dynamic state.
+- KICKOFF Step 9 (ship prep): Vercel preview deploy, ≤8 min screen recording walkthrough, design rationale doc.
+- Pre-existing chat-hydration race noted in previous handoff: reloading /chat/[id] URL bounces to /new before chat-store hydrates. Not user-visible in demo, but flagged.

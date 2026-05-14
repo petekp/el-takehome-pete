@@ -6,119 +6,166 @@ import { usePrototypeStore } from '@/lib/prototype-store'
 import { getConcept } from '@/lib/concepts'
 
 /**
- * Side-panel map. Warm radial halo, central solid node (the concept the user
- * just explored), four ghost nodes for adjacent concepts, a sprinkle of
- * atmospheric outer-ring dots for ambient density.
+ * Side-panel map. The user's explored concept sits at the center; adjacent
+ * concepts radiate outward as pills along an asterisk-shaped spark. The
+ * geometry intentionally evokes the Claude logomark — four long cardinal
+ * rays + two shorter diagonal rays + two short decorative rays at the other
+ * diagonals — so the map reads as a "spark" of related concepts rather than
+ * a uniform grid.
+ *
+ *   - Cardinals (N/E/S/W): the four most directly adjacent concepts.
+ *   - Diagonals (NE/SW): two supporting concepts.
+ *   - Decorative rays (NW/SE): no pill; pure stroke, for the asterisk shape.
  *
  * Interactions:
- *   - Click the central node → enterWorkshop (replaces this view with the
- *     workshop in the same panel).
- *   - Click a ghost node → reveal its hint in a small banner below the map.
- *     Ghosts do not navigate (per KICKOFF spec).
- *
- * This is the rough stub for step 3 of the build sequence. Final polish
- * (positioning, halo treatment, hint animation) lands in step 6.
+ *   - Click the central pill → enterWorkshop.
+ *   - Click a ghost pill → reveal its hint in the banner below. Ghosts don't
+ *     navigate (per KICKOFF spec).
  */
+const MAP_W = 432
+const MAP_H = 360
+const CX = MAP_W / 2 // center x
+const CY = MAP_H / 2 // center y
+
+// One position entry per ghost slot. Cardinals first (long rays), then
+// diagonals (short rays). The order matches the ghostNodes registry order so
+// ghosts[i] lands at POSITIONS[i].
+const POSITIONS = [
+  // Cardinals — long rays, 90° apart
+  { x: CX, y: CY - 150, tier: 'cardinal' as const }, // N
+  { x: CX + 175, y: CY, tier: 'cardinal' as const }, // E
+  { x: CX, y: CY + 150, tier: 'cardinal' as const }, // S
+  { x: CX - 175, y: CY, tier: 'cardinal' as const }, // W
+  // Diagonals — shorter rays, mid-asterisk
+  { x: CX + 100, y: CY - 100, tier: 'diagonal' as const }, // NE
+  { x: CX - 100, y: CY + 100, tier: 'diagonal' as const }, // SW
+]
+
+// Pure-decorative rays at the remaining diagonals (NW, SE). No pill, just the
+// stroke — completes the asterisk silhouette without crowding the map with
+// labels.
+const DECORATIVE_RAYS = [
+  { x: CX - 90, y: CY - 90 }, // NW
+  { x: CX + 90, y: CY + 90 }, // SE
+]
+
 export function MapView() {
   const { state, enterWorkshop } = usePrototypeStore()
   const [selectedGhost, setSelectedGhost] = useState<string | null>(null)
 
   if (!state.arc.conceptId) return null
   const concept = getConcept(state.arc.conceptId)
-  // Live API ghosts when available; registry fallback otherwise. Both go
-  // through the same .slice(0, 4) so we always have a stable four-node layout.
-  const ghosts = (state.arc.ghostNodes ?? concept.descriptors.fallback.ghostNodes).slice(0, 4)
+  const ghosts = (state.arc.ghostNodes ?? concept.descriptors.fallback.ghostNodes).slice(0, 6)
 
   return (
     <div className="flex flex-col gap-4">
-      <svg viewBox="0 0 432 432" className="block w-full" aria-label="Concept map">
-        <defs>
-          <radialGradient id="map-halo" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="var(--color-accent)" stopOpacity={0.28} />
-            <stop offset="55%" stopColor="var(--color-accent)" stopOpacity={0.08} />
-            <stop offset="100%" stopColor="var(--color-accent)" stopOpacity={0} />
-          </radialGradient>
-        </defs>
+      <div
+        className="relative mx-auto w-full"
+        style={{ aspectRatio: `${MAP_W} / ${MAP_H}`, maxWidth: MAP_W }}
+        aria-label="Concept map"
+        role="group"
+      >
+        {/* Spark rays — SVG underlay. Drawn from center to each ray endpoint.
+            Stroke thickness + opacity vary by tier so cardinals read as the
+            primary branches, diagonals as supporting, and decorative rays as
+            ambient. */}
+        <svg
+          viewBox={`0 0 ${MAP_W} ${MAP_H}`}
+          className="absolute inset-0 h-full w-full"
+          aria-hidden
+        >
+          {POSITIONS.map((p, i) => (
+            <line
+              key={`ray-${i}`}
+              x1={CX}
+              y1={CY}
+              x2={p.x}
+              y2={p.y}
+              stroke="var(--color-accent)"
+              strokeWidth={p.tier === 'cardinal' ? 1.5 : 1}
+              strokeOpacity={p.tier === 'cardinal' ? 0.45 : 0.3}
+              strokeLinecap="round"
+            />
+          ))}
+          {DECORATIVE_RAYS.map((p, i) => (
+            <line
+              key={`dec-${i}`}
+              x1={CX}
+              y1={CY}
+              x2={p.x}
+              y2={p.y}
+              stroke="var(--color-accent)"
+              strokeWidth={1}
+              strokeOpacity={0.22}
+              strokeLinecap="round"
+            />
+          ))}
+          {/* Small dots at the tips of the decorative rays — feels like the
+              ray "lands" somewhere, even without a label. */}
+          {DECORATIVE_RAYS.map((p, i) => (
+            <circle
+              key={`dec-tip-${i}`}
+              cx={p.x}
+              cy={p.y}
+              r={2.5}
+              fill="var(--color-accent)"
+              opacity={0.35}
+            />
+          ))}
+        </svg>
 
-        {/* Warm halo */}
-        <circle cx={216} cy={216} r={210} fill="url(#map-halo)" />
-
-        {/* Atmospheric outer-ring dots — scattered around the halo edge */}
-        {OUTER_DOTS.map((d, i) => (
-          <circle
-            key={i}
-            cx={d.x}
-            cy={d.y}
-            r={d.r}
-            fill="var(--color-text-tertiary)"
-            opacity={d.opacity}
-          />
-        ))}
-
-        {/* Ghost nodes (adjacent concepts) */}
+        {/* Ghost pills — positioned over the ray endpoints. */}
         {ghosts.map((ghost, i) => {
-          const pos = GHOST_POSITIONS[i]
+          const pos = POSITIONS[i]
+          if (!pos) return null
           const isSelected = selectedGhost === ghost.id
           return (
-            <g
+            <button
               key={ghost.id}
-              className="cursor-pointer"
+              type="button"
               onClick={() =>
                 setSelectedGhost((current) => (current === ghost.id ? null : ghost.id))
               }
               aria-label={`Adjacent concept: ${ghost.label}`}
+              aria-pressed={isSelected}
+              className={cn(
+                'absolute -translate-x-1/2 -translate-y-1/2',
+                'border-accent/55 bg-page',
+                'cursor-pointer rounded-full border whitespace-nowrap',
+                'transition-[opacity,border-color,color] duration-200',
+                'hover:text-text-secondary hover:border-accent/80',
+                pos.tier === 'cardinal'
+                  ? 'px-3 py-1.5 text-[11px] leading-none'
+                  : 'px-2.5 py-1 text-[10px] leading-none',
+                isSelected ? 'text-text-primary border-accent opacity-100' : 'text-text-tertiary opacity-75',
+              )}
+              style={{
+                left: `${(pos.x / MAP_W) * 100}%`,
+                top: `${(pos.y / MAP_H) * 100}%`,
+                borderStyle: 'dashed',
+              }}
             >
-              <circle
-                cx={pos.x}
-                cy={pos.y}
-                r={22}
-                fill="var(--color-page)"
-                stroke="var(--color-accent)"
-                strokeWidth={1.25}
-                strokeDasharray="3 4"
-                opacity={isSelected ? 1 : 0.65}
-              />
-              <text
-                x={pos.x}
-                y={pos.labelY}
-                textAnchor="middle"
-                fill="var(--color-text-tertiary)"
-                fontSize={11}
-                fontFamily="var(--font-sans)"
-                fontWeight={isSelected ? 500 : 400}
-              >
-                {ghost.label}
-              </text>
-            </g>
+              {ghost.label}
+            </button>
           )
         })}
 
-        {/* Central node — the explored concept */}
-        <g className="cursor-pointer" onClick={enterWorkshop} aria-label="Enter workshop">
-          <circle
-            cx={216}
-            cy={216}
-            r={38}
-            fill="var(--color-accent-strong)"
-            stroke="var(--color-accent)"
-            strokeWidth={2}
-            strokeOpacity={0.35}
-          />
-        </g>
-        <text
-          x={216}
-          y={284}
-          textAnchor="middle"
-          fill="var(--color-text-primary)"
-          fontSize={12}
-          fontFamily="var(--font-sans)"
-          fontWeight={500}
+        {/* Central pill — the explored concept */}
+        <button
+          type="button"
+          onClick={enterWorkshop}
+          aria-label={`Enter workshop: ${concept.descriptors.title}`}
+          className={cn(
+            'absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2',
+            'bg-accent-strong text-page',
+            'cursor-pointer rounded-full px-5 py-2.5 text-sm font-medium leading-none',
+            'whitespace-nowrap transition-transform duration-200 hover:scale-[1.03]',
+            'shadow-[0_1px_2px_rgba(20,20,19,0.08)]',
+          )}
         >
-          {concept.descriptors.title.length > 38
-            ? `${concept.descriptors.title.slice(0, 36)}…`
-            : concept.descriptors.title}
-        </text>
-      </svg>
+          {concept.descriptors.title}
+        </button>
+      </div>
 
       {/* Ghost hint banner */}
       <div className="min-h-[64px]">
@@ -126,7 +173,7 @@ export function MapView() {
           <GhostHint hint={ghosts.find((g) => g.id === selectedGhost)?.hint ?? ''} />
         ) : (
           <p className="text-text-tertiary text-xs italic">
-            Tap a dashed node to see what it points to.
+            Tap a dashed pill to see what it points to.
           </p>
         )}
       </div>
@@ -145,28 +192,3 @@ function GhostHint({ hint }: { hint: string }) {
     </div>
   )
 }
-
-// Hand-placed positions for the four ghost nodes — four corners of a square
-// inset from the halo's edge. labelY sits below each node.
-const GHOST_POSITIONS = [
-  { x: 96, y: 112, labelY: 88 },
-  { x: 336, y: 112, labelY: 88 },
-  { x: 336, y: 320, labelY: 360 },
-  { x: 96, y: 320, labelY: 360 },
-]
-
-// Sparse, hand-placed atmospheric dots. Loose constellation, not perfectly even.
-const OUTER_DOTS = [
-  { x: 56, y: 200, r: 2, opacity: 0.18 },
-  { x: 384, y: 240, r: 1.5, opacity: 0.16 },
-  { x: 200, y: 48, r: 2, opacity: 0.2 },
-  { x: 248, y: 392, r: 1.5, opacity: 0.14 },
-  { x: 72, y: 376, r: 1.5, opacity: 0.12 },
-  { x: 376, y: 76, r: 2, opacity: 0.18 },
-  { x: 40, y: 132, r: 1.5, opacity: 0.15 },
-  { x: 400, y: 348, r: 1.5, opacity: 0.13 },
-  { x: 168, y: 28, r: 1.25, opacity: 0.12 },
-  { x: 304, y: 404, r: 1.25, opacity: 0.12 },
-  { x: 20, y: 252, r: 1.25, opacity: 0.1 },
-  { x: 412, y: 168, r: 1.25, opacity: 0.1 },
-]

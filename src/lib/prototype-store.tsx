@@ -553,7 +553,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
           onData: (data) => {
             if (Array.isArray(data.ghosts)) {
               const ghosts = data.ghosts as GhostNode[]
-              if (ghosts.length >= 4) live = ghosts.slice(0, 4)
+              // Need at least 4 to fill the cardinal positions; up to 6 fills
+              // both cardinals + diagonals. Below 4, fall back to the registry.
+              if (ghosts.length >= 4) live = ghosts.slice(0, 6)
             }
           },
         })

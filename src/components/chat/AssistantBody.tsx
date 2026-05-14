@@ -1,4 +1,4 @@
-import { Streamdown, type AllowedTags, type AnimateOptions, type Components } from 'streamdown'
+import { Streamdown, type AllowedTags, type Components } from 'streamdown'
 import { cn } from '@/lib/utils'
 import {
   AffordanceButtons,
@@ -7,11 +7,6 @@ import {
   ReflectionInput,
 } from '@/components/prototype'
 import { ClaudeHeading, ClaudeList, ClaudeListItem, ClaudeParagraph } from './ClaudeMessage'
-
-const STREAM_ANIMATION: AnimateOptions = {
-  animation: 'fadeIn',
-  easing: 'ease-out',
-}
 
 /**
  * Inline arc components: the server's beat-aware prompts instruct Claude to
@@ -29,9 +24,7 @@ const ARC_TAGS: AllowedTags = {
 type AssistantBodyProps = {
   text: string
   /**
-   * True for the live stream buffer; false for committed messages. Streamdown
-   * uses this to enable its incremental-parse + caret animation for in-flight
-   * content.
+   * True for the live stream buffer; false for committed messages.
    */
   isStreaming?: boolean
 }
@@ -53,7 +46,7 @@ export function AssistantBody({ text, isStreaming = false }: AssistantBodyProps)
   return (
     <Streamdown
       isAnimating={isStreaming && hasText}
-      animated={isStreaming ? STREAM_ANIMATION : false}
+      animated={false}
       caret="circle"
       parseIncompleteMarkdown
       allowedTags={ARC_TAGS}

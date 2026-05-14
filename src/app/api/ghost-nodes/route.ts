@@ -16,16 +16,16 @@ const MODEL = 'claude-sonnet-4-6'
 
 const GHOST_TOOL = {
   name: 'emit_ghost_nodes',
-  description: 'Emit exactly four adjacent-concept ghost nodes for the map.',
+  description: 'Emit exactly six adjacent-concept ghost nodes for the map.',
   input_schema: {
     type: 'object' as const,
     properties: {
       ghosts: {
         type: 'array',
-        minItems: 4,
-        maxItems: 4,
+        minItems: 6,
+        maxItems: 6,
         description:
-          'Exactly four ghost-node entries. Each is an adjacent concept the user might venture to next.',
+          'Exactly six ghost-node entries, ordered most-related first. The first four occupy "cardinal" positions on the map (long rays — most adjacent concepts); the last two occupy "diagonal" positions (short rays — supporting context).',
         items: {
           type: 'object',
           properties: {
@@ -60,21 +60,27 @@ function ghostSystemPrompt(concept: Concept, reflectionText: string): string {
       : 'The user skipped reflection — pick a balanced mix of adjacent angles.'
 
   return [
-    `You are picking four adjacent-concept "ghost nodes" for a personal concept map. The user just learned about: ${concept.descriptors.title}.`,
+    `You are picking six adjacent-concept "ghost nodes" for a personal concept map. The user just learned about: ${concept.descriptors.title}.`,
     '',
     reflectionBlock,
     '',
-    'Pick exactly four adjacent concepts that:',
+    'Pick exactly six adjacent concepts that:',
     '  - Live near this concept conceptually (same neighborhood of the language / runtime).',
-    '  - Each gestures at a different angle (sibling APIs, escape hatches, related failure modes, what-NOT-to-do, etc.) — avoid four variations of the same point.',
+    '  - Each gestures at a different angle (sibling APIs, escape hatches, related failure modes, what-NOT-to-do, etc.) — avoid duplicates.',
     '  - Are concrete enough to be a real "next thing to look at," not abstract categories.',
     '',
-    'Strongly preferred shape for this concept: include',
+    'IMPORTANT — ORDER MATTERS. The first four are "cardinal" (closest, most-related) and the last two are "diagonal" (slightly further out, supporting context). Put your strongest four first.',
+    '',
+    'Strongly preferred shape for this concept:',
+    '  Cardinals (the first four — most directly adjacent):',
     '  - the sibling method that matches a common misconception (Promise.allSettled),',
     '  - a settling-on-first-resolution sibling (Promise.race),',
     '  - the practical escape hatch the wrapper depends on (AbortController OR timeouts),',
-    '  - one "the flip side of all-or-nothing" — unhandled rejections / fast-fail behavior.',
-    'You may swap one of these for a stronger fit if your judgement says so.',
+    '  - the flip side of all-or-nothing — unhandled rejections / fast-fail behavior.',
+    '  Diagonals (the last two — supporting):',
+    '  - the third sibling (Promise.any — settles on first success),',
+    '  - the user\'s original instinct (try/catch with promises — why it didn\'t fix this).',
+    'You may swap entries for stronger fits if your judgement says so, but keep the cardinal-then-diagonal ordering.',
     '',
     'For each entry emit a short label (2–4 words) and a one-sentence hint. The hint should feel like Claude leaning over and saying "if you head this way, you\'ll find ___" — invitational, plainspoken, peer-level. Not "Click to learn more!" or "Reflect on…".',
   ].join('\n')
