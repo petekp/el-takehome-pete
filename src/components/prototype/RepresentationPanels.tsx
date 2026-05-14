@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { activeCue, usePrototypeStore, type RepresentationPanelId } from '@/lib/prototype-store'
 import type { ElementCue, Molecule } from '@/lib/artifact-script'
 import type { ImageAttachment } from '@/lib/types'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/ToggleGroup'
 
 /**
  * The row of compact representation cards above the 3D viewport edge.
@@ -115,54 +116,46 @@ export function RepresentationPanels() {
   return (
     <div
       ref={containerRef}
-      // py-2 reserves room for the cards' box-shadows (and the cue
-      // pulse outline shadow) inside the scrollable element — setting
-      // overflow-x to auto clips both axes, so without vertical padding the
-      // shadows would be sliced off above and below each card.
-      className="no-scrollbar flex gap-2 overflow-x-auto py-2"
+      // py-2 reserves room for the toggle group's box-shadows (and the cue
+      // pulse outline shadow) inside the scrollable element — overflow-x:auto
+      // clips both axes, so without vertical padding the shadows get sliced.
+      className="no-scrollbar flex overflow-x-auto py-2"
       style={{ maskImage, WebkitMaskImage: maskImage }}
     >
-      {PANELS.map((p) => {
-        const active = artifact.activePanel === p.id
-        const cued = cueMatchesPanel(cue, p.id)
-        // Once the user has clicked a cued card, suppress its pulse even
-        // if the cue is still broadcasting (e.g. panels-row still wants to
-        // highlight the others).
-        const explored = artifact.panelsExplored.includes(p.id)
-        const showCue = cued && !explored && !active
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => clickPanel(p.id)}
-            className={cn(
-              'group relative inline-flex shrink-0 items-center justify-center overflow-hidden',
-              'rounded-full border px-3.5 py-1.5 backdrop-blur-md transition-colors',
-              active
-                ? 'border-accent/55 bg-accent/15 shadow-md'
-                : 'border-border-subtle bg-surface/80 shadow-sm hover:border-border-soft hover:bg-surface/95',
-              showCue && 'shadow-[0_0_0_3px_rgba(0,139,255,0.18)]',
-            )}
-            aria-pressed={active}
-            aria-label={p.label}
-          >
-            <span
+      <ToggleGroup
+        type="single"
+        value={artifact.activePanel ?? null}
+        onValueChange={(v) => clickPanel(v as LiteracyPanelId)}
+      >
+        {PANELS.map((p) => {
+          const active = artifact.activePanel === p.id
+          const cued = cueMatchesPanel(cue, p.id)
+          // Once the user has clicked a cued item, suppress its pulse even
+          // if the cue is still broadcasting (e.g. panels-row still wants to
+          // highlight the others).
+          const explored = artifact.panelsExplored.includes(p.id)
+          const showCue = cued && !explored && !active
+          return (
+            <ToggleGroupItem
+              key={p.id}
+              value={p.id}
+              aria-label={p.label}
               className={cn(
-                'whitespace-nowrap text-[12px] font-medium',
-                active ? 'text-accent-strong' : 'text-text-secondary',
+                'relative overflow-visible',
+                showCue && 'shadow-[0_0_0_3px_rgba(0,139,255,0.18)] z-10',
               )}
             >
               {p.label}
-            </span>
-            {showCue && (
-              <span
-                aria-hidden
-                className="border-accent/40 bg-accent/8 pointer-events-none absolute -inset-0.5 -z-10 animate-[cuePulse_1600ms_ease-in-out_infinite] rounded-full border"
-              />
-            )}
-          </button>
-        )
-      })}
+              {showCue && (
+                <span
+                  aria-hidden
+                  className="border-accent/40 bg-accent/8 pointer-events-none absolute -inset-0.5 -z-10 animate-[cuePulse_1600ms_ease-in-out_infinite] rounded-full border"
+                />
+              )}
+            </ToggleGroupItem>
+          )
+        })}
+      </ToggleGroup>
     </div>
   )
 }

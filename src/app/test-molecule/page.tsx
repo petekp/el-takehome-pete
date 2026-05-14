@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { MoleculeScene } from '@/components/prototype/MoleculeScene'
+import { MoleculeScene, moleculeNaturalLpCount } from '@/components/prototype/MoleculeScene'
 import type { Molecule } from '@/lib/artifact-script'
 import type { ChipState } from '@/lib/prototype-store'
 
@@ -54,7 +54,12 @@ export default function TestMoleculePage() {
         </div>
 
         <div className="aspect-[4/3] w-full overflow-hidden rounded-md border border-border-subtle">
-          <MoleculeScene molecule={molecule} chipState={chipState} className="size-full" />
+          <MoleculeScene
+            molecule={molecule}
+            chipState={chipState}
+            lpCount={moleculeNaturalLpCount(molecule)}
+            className="size-full"
+          />
         </div>
       </div>
     </main>

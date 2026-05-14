@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { motion } from 'motion/react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { cn } from '@/lib/utils'
@@ -231,7 +232,7 @@ function xef2AxialStrain(): MoleculeData {
   }
 }
 
-function moleculeNaturalLpCount(name: Molecule): number {
+export function moleculeNaturalLpCount(name: Molecule): number {
   switch (name) {
     case 'xef2':
       return 3
@@ -335,7 +336,7 @@ const TREATMENT_TARGETS: Record<Treatment, TreatmentTarget> = {
     cameraPos: LEWIS_CAM,
     fov: 25,
     enableRotate: true,
-    filter: 'grayscale(0.6) contrast(0.95) brightness(1.03)',
+    filter: 'none',
   },
   wedge: {
     cameraPos: WEDGE_CAM,
@@ -347,7 +348,7 @@ const TREATMENT_TARGETS: Record<Treatment, TreatmentTarget> = {
     cameraPos: GEOMETRY_CAM,
     fov: 40,
     enableRotate: true,
-    filter: 'saturate(0.55)',
+    filter: 'none',
   },
 }
 
@@ -385,8 +386,10 @@ function safeAreaZoom(width: number, height: number, insets: SafeInsets): number
   if (width <= 0 || height <= 0) return 1
   const horizRatio = (width - insets.right) / width
   const vertRatio = (height - insets.top - insets.bottom) / height
-  const ratio = Math.min(horizRatio, vertRatio) * 0.95
-  return Math.max(0.3, Math.min(1, ratio))
+  // 1.15× pushes the molecule a bit larger relative to the safe area; the
+  // cap is raised to 1.25 so this can actually take effect for wide layouts.
+  const ratio = Math.min(horizRatio, vertRatio) * 1.15
+  return Math.max(0.3, Math.min(1.25, ratio))
 }
 
 function targetZoomForTreatment(
@@ -486,6 +489,10 @@ type MoleculeSceneProps = {
   chipState: ChipState
   /** Drives the per-panel rendering treatment. */
   activePanel?: RepresentationPanelId | null
+  /** Continuous lone-pair count (0..3). Lifted to the parent so the LP slider
+   *  can live next to the representation toggle group instead of floating
+   *  inside the viewport. */
+  lpCount: number
   /** Called with positive rotation deltas (radians) every orbit-controls tick.
    *  The parent accumulates these toward the rotation gate. */
   onRotationDelta?: (deltaRad: number) => void
@@ -503,6 +510,7 @@ export function MoleculeScene({
   molecule,
   chipState,
   activePanel,
+  lpCount,
   onRotationDelta,
   onExitTreatment,
   topOverlayInsetPx = 0,
@@ -535,17 +543,6 @@ export function MoleculeScene({
   const treatment = panelToTreatment(activePanel ?? null)
   const [filterCss, setFilterCss] = useState<string>('none')
 
-  // --- Slider: continuous lone-pair count. -------------------------------
-  // The slider is hidden for the axial-strain preset (a hand-authored
-  // non-equilibrium configuration the parameterized builder can't reproduce).
-  const sliderEnabled = molecule !== 'xef2-axial-strain'
-  const [sliderLp, setSliderLp] = useState<number>(moleculeNaturalLpCount(molecule))
-  const [trackedMolecule, setTrackedMolecule] = useState<Molecule>(molecule)
-  if (trackedMolecule !== molecule) {
-    setTrackedMolecule(molecule)
-    setSliderLp(moleculeNaturalLpCount(molecule))
-  }
-
   // --- Drag: tracked entirely outside React state. The pointer handler
   //     updates the dragged LP's mesh imperatively each frame; React only
   //     learns about the drag through scene rebuilds (slider scrubs, beat
@@ -573,8 +570,8 @@ export function MoleculeScene({
   } | null>(null)
 
   const data = useMemo(
-    () => effectiveMoleculeData(molecule, sliderLp),
-    [molecule, sliderLp],
+    () => effectiveMoleculeData(molecule, lpCount),
+    [molecule, lpCount],
   )
   // The mount-effect's RAF tick needs the latest canonical molecule data so
   // the snap-back animation can deform the rest of the molecule alongside
@@ -709,9 +706,26 @@ export function MoleculeScene({
       controls.update()
     }
 
+    // Entrance: rotate the molecule group from a small offset back to zero
+    // while the wrapper div fades + scales in (motion handles the latter).
+    // The CSS animation runs 700ms; Three.js drives the matching 3D
+    // rotation over the same window so the two land together.
+    const ENTRANCE_MS = 720
+    const ENTRANCE_FROM_Y = -0.55 // radians
+    moleculeGroup.rotation.y = ENTRANCE_FROM_Y
+    const entranceStart = performance.now()
+
     let rafId = 0
     const tick = () => {
       controls.update()
+
+      // Drive the 3D entrance rotation back to identity.
+      if (moleculeGroup.rotation.y !== 0) {
+        const t = Math.min((performance.now() - entranceStart) / ENTRANCE_MS, 1)
+        const eased = 1 - Math.pow(1 - t, 3)
+        moleculeGroup.rotation.y = ENTRANCE_FROM_Y * (1 - eased)
+        if (t >= 1) moleculeGroup.rotation.y = 0
+      }
 
       // Snap-back animation: ease the dragged LP back to its stable target
       // after release. The deformation pass re-runs each frame so other atoms
@@ -1004,6 +1018,33 @@ export function MoleculeScene({
     const dragPlanePoint = new THREE.Vector3()
     let hoverTimeout: number | null = null
     let activeDrag: { key: string } | null = null
+    // Currently-illuminated inspectable root + the per-mesh emissive values
+    // we stashed so we can restore them when the cursor moves off. Three.js
+    // materials don't expose a "lighten by X" API, so we mutate emissive
+    // directly and remember the original.
+    let illuminatedRoot: THREE.Object3D | null = null
+    const stashedEmissive = new Map<THREE.MeshStandardMaterial, THREE.Color>()
+    const HOVER_EMISSIVE = new THREE.Color(0xffe0a8)
+    const HOVER_EMISSIVE_INTENSITY = 0.22
+    const illuminate = (root: THREE.Object3D) => {
+      root.traverse((c) => {
+        const mesh = c as THREE.Mesh
+        const mat = mesh.material as THREE.MeshStandardMaterial | undefined
+        if (!mat || !('emissive' in mat)) return
+        if (stashedEmissive.has(mat)) return
+        stashedEmissive.set(mat, mat.emissive.clone())
+        mat.emissive.copy(HOVER_EMISSIVE)
+        mat.emissiveIntensity = HOVER_EMISSIVE_INTENSITY
+      })
+    }
+    const dim = () => {
+      for (const [mat, orig] of stashedEmissive) {
+        mat.emissive.copy(orig)
+        mat.emissiveIntensity = 1
+      }
+      stashedEmissive.clear()
+      illuminatedRoot = null
+    }
 
     const setPointerFromEvent = (e: PointerEvent) => {
       const rect = canvas.getBoundingClientRect()
@@ -1019,6 +1060,7 @@ export function MoleculeScene({
     const findInspectable = (hits: THREE.Intersection[]): {
       payload: InspectPayload
       lpKey?: string
+      root: THREE.Object3D
     } | null => {
       for (const hit of hits) {
         let obj: THREE.Object3D | null = hit.object
@@ -1026,7 +1068,7 @@ export function MoleculeScene({
           const payload = obj.userData[USERDATA_INSPECT] as InspectPayload | undefined
           if (payload) {
             const lpKey = obj.userData[USERDATA_LP_KEY] as string | undefined
-            return { payload, lpKey }
+            return { payload, lpKey, root: obj }
           }
           obj = obj.parent
         }
@@ -1094,6 +1136,19 @@ export function MoleculeScene({
         return
       }
 
+      // Suppress hover while any pointer button is held — this covers both
+      // LP drag (handled above) and OrbitControls camera rotation, neither
+      // of which should reveal a tooltip mid-interaction.
+      if (e.buttons > 0) {
+        if (hoverTimeout !== null) {
+          window.clearTimeout(hoverTimeout)
+          hoverTimeout = null
+        }
+        setHover(null)
+        dim()
+        return
+      }
+
       // Hover-to-inspect path. Throttle by clearing any pending tooltip
       // schedule and re-scheduling with a short delay so the tooltip
       // doesn't flicker as the cursor moves across a single element.
@@ -1106,10 +1161,18 @@ export function MoleculeScene({
         }
         setHover(null)
         canvas.style.cursor = 'default'
+        dim()
         return
       }
 
       canvas.style.cursor = found.lpKey ? 'grab' : 'default'
+
+      // Swap illumination if the hovered root changed.
+      if (illuminatedRoot !== found.root) {
+        dim()
+        illuminate(found.root)
+        illuminatedRoot = found.root
+      }
 
       if (hoverTimeout !== null) window.clearTimeout(hoverTimeout)
       const rect = canvas.getBoundingClientRect()
@@ -1127,10 +1190,19 @@ export function MoleculeScene({
       }
       setHover(null)
       canvas.style.cursor = 'default'
+      dim()
     }
 
     const onPointerDown = (e: PointerEvent) => {
       setPointerFromEvent(e)
+      // Any pointer-down hides the hover tooltip — whether the user is about
+      // to drag a lone pair or rotate the camera, the tooltip should clear.
+      if (hoverTimeout !== null) {
+        window.clearTimeout(hoverTimeout)
+        hoverTimeout = null
+      }
+      setHover(null)
+      dim()
       const hits = intersect()
       const found = findInspectable(hits)
       if (!found || !found.lpKey) return
@@ -1187,11 +1259,17 @@ export function MoleculeScene({
       canvas.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('pointerup', onPointerUp)
       if (hoverTimeout !== null) window.clearTimeout(hoverTimeout)
+      dim()
     }
   }, [data])
 
   return (
-    <div className={cn('relative size-full', className)}>
+    <motion.div
+      className={cn('relative size-full', className)}
+      initial={{ opacity: 0, scale: 0.92 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.72, ease: [0.22, 0.8, 0.36, 1] }}
+    >
       <div
         ref={containerRef}
         className="absolute inset-0 overflow-hidden"
@@ -1211,16 +1289,8 @@ export function MoleculeScene({
         topInsetPx={topOverlayInsetPx}
         rightInsetPx={rightOverlayInsetPx}
       />
-      {sliderEnabled && (
-        <LonePairSlider
-          value={sliderLp}
-          onChange={setSliderLp}
-          rightInsetPx={rightOverlayInsetPx}
-          bottomInsetPx={bottomOverlayInsetPx}
-        />
-      )}
       {hover && <InspectTooltip x={hover.x} y={hover.y} payload={hover.payload} />}
-    </div>
+    </motion.div>
   )
 }
 
@@ -1333,42 +1403,36 @@ function seatLabelForDirection(dir: THREE.Vector3): string {
 // Slider + tooltip overlays.
 // ---------------------------------------------------------------------------
 
-function LonePairSlider({
+export function lpShapeLabel(n: number): string {
+  return n < 0.5
+    ? 'trigonal bipyramidal'
+    : n < 1.5
+      ? 'see-saw'
+      : n < 2.5
+        ? 'T-shaped'
+        : 'linear'
+}
+
+/** Compact horizontal control that sits inline with the representation
+ *  toggle group at the bottom of the viewport. The shape name is the
+ *  label; the value display lives on the right. */
+export function LonePairSlider({
   value,
   onChange,
-  rightInsetPx,
-  bottomInsetPx,
+  className,
 }: {
   value: number
   onChange: (v: number) => void
-  rightInsetPx: number
-  bottomInsetPx: number
+  className?: string
 }) {
-  // Sit above the representation-panels row, anchored along the left side
-  // of the safe area. Width clamps to a reasonable horizontal span so the
-  // tick labels stay legible.
-  const bottom = bottomInsetPx > 0 ? bottomInsetPx - 4 : 12
-  const right = rightInsetPx > 0 ? rightInsetPx + 8 : 12
-  const shapeLabel = (n: number) =>
-    n < 0.5
-      ? 'trigonal bipyramidal'
-      : n < 1.5
-        ? 'see-saw'
-        : n < 2.5
-          ? 'T-shaped'
-          : 'linear'
   return (
     <div
-      style={{ bottom: `${bottom}px`, right: `${right}px` }}
       className={cn(
-        'border-border-subtle bg-page/85 pointer-events-auto absolute z-10 flex w-[260px]',
-        'flex-col gap-1 rounded-md border px-3 py-2 backdrop-blur-sm shadow-sm',
+        'pointer-events-auto flex items-center gap-2 text-[11px]',
+        className,
       )}
     >
-      <div className="flex items-center justify-between text-[11px]">
-        <span className="text-text-secondary font-medium">Lone pairs: {value.toFixed(1)}</span>
-        <span className="text-text-tertiary italic">{shapeLabel(value)}</span>
-      </div>
+      <span className="text-text-tertiary whitespace-nowrap">Lone pairs</span>
       <input
         type="range"
         min={0}
@@ -1377,22 +1441,23 @@ function LonePairSlider({
         value={value}
         onChange={(e) => {
           const raw = parseFloat(e.target.value)
-          // Soft snap-to-tick: integers within 0.12 pull to the integer
-          // so the user feels a gentle detent but can still hold at
-          // intermediate values.
+          // Soft snap-to-tick: integers within 0.12 pull to the integer so
+          // the user feels a gentle detent but can hold intermediate values.
           const nearest = Math.round(raw)
           const snapped = Math.abs(raw - nearest) < 0.12 ? nearest : raw
           onChange(snapped)
         }}
-        className="w-full"
+        className="h-1 w-[96px] cursor-pointer"
         aria-label="Lone-pair count"
       />
-      <div className="text-text-tertiary flex justify-between text-[9px]">
-        <span>0</span>
-        <span>1</span>
-        <span>2</span>
-        <span>3</span>
-      </div>
+      <span className="text-text-secondary tabular-nums font-medium whitespace-nowrap">
+        {value.toFixed(1)}
+      </span>
+      {/* Min-width reserves room for the longest shape ("trigonal
+          bipyramidal") so the label can change without shifting the slider. */}
+      <span className="text-text-tertiary inline-block min-w-[120px] italic whitespace-nowrap">
+        {lpShapeLabel(value)}
+      </span>
     </div>
   )
 }
@@ -1469,7 +1534,7 @@ function SceneLegend({
   return (
     <div
       style={{ top: `${top}px`, left: 12 }}
-      className="border-border-subtle bg-page/85 text-text-secondary pointer-events-none absolute z-10 flex flex-col gap-1 rounded-md border px-2.5 py-2 text-[12px] backdrop-blur-sm"
+      className="text-text-secondary pointer-events-none absolute z-10 flex flex-row items-center gap-3 text-[12px]"
     >
       {elements.map((e) => (
         <span key={e} className="flex items-center gap-1.5">
@@ -1837,16 +1902,11 @@ function buildScene(
     treatment !== 'wedge' &&
     treatment !== 'lewis'
 
-  // Atoms — always rendered. In geometry treatment, lerp colors toward
-  // neutral so the abstract structure reads first.
   const atomByKey = new Map<string, AtomDef>()
   for (const atom of data.atoms) {
     atomByKey.set(atom.key, atom)
     const geom = new THREE.SphereGeometry(ATOM_RADIUS[atom.element], 32, 32)
     const color = new THREE.Color(ATOM_COLOR[atom.element])
-    if (treatment === 'geometry') {
-      color.lerp(new THREE.Color(0xa8a39a), 0.55)
-    }
     const mat = new THREE.MeshStandardMaterial({
       color,
       roughness: treatment === 'lewis' ? 0.95 : 0.55,
@@ -2150,7 +2210,9 @@ function makeAngleAnnotation(data: MoleculeData, prominent: boolean): THREE.Grou
     grp.add(line)
   }
 
-  const labelPos = a.clone().add(b).multiplyScalar(0.5).add(new THREE.Vector3(0.55, 0, 0))
+  // Park the degrees label on the +x edge of the equatorial circle so it
+  // reads off the ring rather than crowding the central atom.
+  const labelPos = new THREE.Vector3(EQUATORIAL_PLANE_RADIUS + 0.18, 0, 0)
   const sprite = makeTextSprite(`${data.bondAngle}°`, prominent)
   sprite.position.copy(labelPos)
   tagMeshOpacity(sprite, 1)
@@ -2159,22 +2221,34 @@ function makeAngleAnnotation(data: MoleculeData, prominent: boolean): THREE.Grou
 }
 
 function makeTextSprite(text: string, prominent: boolean, colorHex?: number): THREE.Sprite {
+  // Supersample the canvas texture so the sprite stays crisp when the
+  // camera moves close — the visible size is controlled by sprite.scale,
+  // not canvas resolution, so we can render at high DPR for free.
+  const SS = 4
+  const baseW = 384
+  const baseH = 128
   const canvas = document.createElement('canvas')
-  const w = 384
-  const h = 128
-  canvas.width = w
-  canvas.height = h
+  canvas.width = baseW * SS
+  canvas.height = baseH * SS
   const ctx = canvas.getContext('2d')!
+  ctx.scale(SS, SS)
   const color = colorHex !== undefined ? `#${colorHex.toString(16).padStart(6, '0')}` : '#4a4540'
   ctx.fillStyle = color
-  ctx.font = `${prominent ? 700 : 500} ${prominent ? 56 : 48}px ui-sans-serif, system-ui, -apple-system, sans-serif`
+  // Lighter weight reads as refined; bumping size slightly keeps the
+  // optical heft after dropping from 700 → 500.
+  const weight = prominent ? 500 : 400
+  const size = prominent ? 52 : 44
+  ctx.font = `${weight} ${size}px ui-sans-serif, system-ui, -apple-system, sans-serif`
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
-  ctx.fillText(text, w / 2, h / 2 + 2)
+  ctx.fillText(text, baseW / 2, baseH / 2 + 2)
   const texture = new THREE.CanvasTexture(canvas)
   texture.needsUpdate = true
   texture.colorSpace = THREE.SRGBColorSpace
-  texture.anisotropy = 4
+  texture.anisotropy = 16
+  texture.minFilter = THREE.LinearMipmapLinearFilter
+  texture.magFilter = THREE.LinearFilter
+  texture.generateMipmaps = true
   const mat = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,

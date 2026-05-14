@@ -34,8 +34,7 @@ import {
   type Prediction1Key,
   type Prediction2Key,
 } from '@/lib/artifact-script'
-import { MoleculeScene } from './MoleculeScene'
-import { ViewportControls } from './ToggleChips'
+import { LonePairSlider, MoleculeScene, moleculeNaturalLpCount } from './MoleculeScene'
 import { MaterialsLightbox, PanelDiagram, RepresentationPanels } from './RepresentationPanels'
 import type { ImageAttachment } from '@/lib/types'
 
@@ -120,6 +119,19 @@ export function Artifact() {
   const [materialsOpen, setMaterialsOpen] = useState(false)
   const [expandedPanel, setExpandedPanel] = useState<LiteracyPanel | null>(null)
 
+  // Continuous lone-pair count drives the parameterized 5-domain morph. Lives
+  // here (not inside MoleculeScene) so the slider can sit next to the
+  // representation toggle group in the same container at the viewport edge.
+  const activeMolecule = artifact?.activeMolecule
+  const [lpCount, setLpCount] = useState<number>(
+    activeMolecule ? moleculeNaturalLpCount(activeMolecule) : 3,
+  )
+  const [trackedMolecule, setTrackedMolecule] = useState(activeMolecule)
+  if (activeMolecule && activeMolecule !== trackedMolecule) {
+    setTrackedMolecule(activeMolecule)
+    setLpCount(moleculeNaturalLpCount(activeMolecule))
+  }
+
   // Reset expansion whenever the active panel changes underneath (panel
   // deactivated, switched to another literacy panel, etc.) so we never end
   // up with an expanded overlay for a panel that isn't even active. Uses the
@@ -180,6 +192,7 @@ export function Artifact() {
           molecule={artifact.activeMolecule}
           chipState={artifact.chipState}
           activePanel={artifact.activePanel}
+          lpCount={lpCount}
           onRotationDelta={addRotation}
           onExitTreatment={
             artifact.activePanel ? () => clickPanel(artifact.activePanel!) : undefined
@@ -199,15 +212,18 @@ export function Artifact() {
           onClose={interactive ? closeArtifact : undefined}
         />
 
-        <div className="pointer-events-auto absolute left-3 top-[60px] z-10">
-          <ViewportControls />
-        </div>
         <ViewportCue artifact={artifact} />
 
-        {/* Representation panels overlay along the bottom, stopping short of
-            the floating right pane so the cards don't slip behind it. */}
-        <div className="pointer-events-auto absolute bottom-3 left-3 right-[340px] z-10">
+        {/* Representation toggle group + lone-pair slider sit in the same
+            horizontal row along the bottom, stopping short of the floating
+            right pane so they don't slip behind it. The slider is hidden for
+            the axial-strain preset (non-equilibrium configuration the
+            parameterized builder can't reproduce). */}
+        <div className="pointer-events-auto absolute bottom-3 left-3 right-[340px] z-10 flex items-center gap-4">
           <RepresentationPanels />
+          {artifact.activeMolecule !== 'xef2-axial-strain' && (
+            <LonePairSlider value={lpCount} onChange={setLpCount} />
+          )}
         </div>
 
         {/* Right pane as a floating card on top of the visualization. */}
