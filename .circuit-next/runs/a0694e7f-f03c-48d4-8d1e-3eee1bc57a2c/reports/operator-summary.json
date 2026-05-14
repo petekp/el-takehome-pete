@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "run_id": "a0694e7f-f03c-48d4-8d1e-3eee1bc57a2c",
+  "flow_id": "build",
+  "selected_flow": "build",
+  "routed_by": "explicit",
+  "router_reason": "explicit flow positional argument",
+  "outcome": "aborted",
+  "headline": "Circuit: Run aborted.",
+  "status_text": "Run aborted.",
+  "details": [
+    "Worker access: A worker can edit this checkout.",
+    "Run note: Run closed with outcome aborted.",
+    "Abort reason: Cannot choose verification commands because package.json is missing required script one of verify, test, or check."
+  ],
+  "evidence_warnings": [],
+  "run_folder": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main/.circuit-next/runs/a0694e7f-f03c-48d4-8d1e-3eee1bc57a2c",
+  "result_path": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main/.circuit-next/runs/a0694e7f-f03c-48d4-8d1e-3eee1bc57a2c/reports/result.json",
+  "report_paths": [
+    {
+      "label": "Run result",
+      "path": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main/.circuit-next/runs/a0694e7f-f03c-48d4-8d1e-3eee1bc57a2c/reports/result.json"
+    }
+  ]
+}

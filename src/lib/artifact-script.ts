@@ -240,9 +240,10 @@ const SHARED_BOND_ANGLE_BEAT: Bubble = {
 const NOTATIONAL_REVEAL_1: Bubble[] = [
   {
     text:
-      "The drawing doesn't tell you that, you're right — but the position isn't arbitrary. There's a real geometric reason. Watch what happens if we put a lone pair in an axial position instead.",
-    molecule: 'xef2-axial-strain',
-    focus: 'axial-strain',
+      "The drawing doesn't tell you that, you're right — but the position isn't arbitrary. There's a real geometric reason. Want to feel it? Grab one of the lone pairs and try dragging it up to the axial position where an F currently sits. Watch the molecule resist.",
+    molecule: 'xef2',
+    focus: 'equatorial-reveal',
+    cue: 'viewport',
   },
   {
     text:
@@ -403,7 +404,7 @@ export const REVEAL_2_PATHS: Record<Prediction2Key, Bubble[]> = {
 
 export const CLOSING_BUBBLE: Bubble = {
   text:
-    "Here's the move. Your chart compresses every 5-domain shape into one row, but they're all the same underlying idea: lone pairs claim equatorial positions because there's more space, and the F's get whatever's left over. Linear, T-shape, see-saw — same logic, different number of lone pairs. The wedge-and-dash drawings can't show you that, which is why the row feels arbitrary. Once you see the 3D version, the chart starts making sense as a description instead of a rule to memorize.",
+    "Here's the move. Your chart compresses every 5-domain shape into one row, but they're all the same underlying idea: lone pairs claim equatorial positions because there's more space, and the F's get whatever's left over. Drag the lone-pair slider from 0 to 3 — you'll see the whole row morph past you: trigonal bipyramidal, see-saw, T-shape, linear. Same logic, different number of lone pairs.",
   molecule: 'xef2',
   focus: 'closing',
 }

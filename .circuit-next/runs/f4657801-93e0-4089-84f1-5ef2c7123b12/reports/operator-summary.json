@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "run_id": "f4657801-93e0-4089-84f1-5ef2c7123b12",
+  "flow_id": "build",
+  "selected_flow": "build",
+  "routed_by": "explicit",
+  "router_reason": "explicit flow positional argument",
+  "outcome": "aborted",
+  "headline": "Circuit: Run aborted.",
+  "status_text": "Run aborted.",
+  "details": [
+    "Worker access: A worker can edit this checkout.",
+    "Run note: Run closed with outcome aborted.",
+    "Abort reason: route 'retry' for step 'act-step' exhausted max_attempts=2; last recovery reason: relay step 'act-step': connector invocation failed (claude-code subprocess timed out after 600000ms; group-kill sent; final signal=none; stderr[:500]=)"
+  ],
+  "evidence_warnings": [],
+  "run_folder": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main/.circuit-next/runs/f4657801-93e0-4089-84f1-5ef2c7123b12",
+  "result_path": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main/.circuit-next/runs/f4657801-93e0-4089-84f1-5ef2c7123b12/reports/result.json",
+  "report_paths": [
+    {
+      "label": "Run result",
+      "path": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main/.circuit-next/runs/f4657801-93e0-4089-84f1-5ef2c7123b12/reports/result.json"
+    }
+  ]
+}

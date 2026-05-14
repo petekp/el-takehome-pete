@@ -122,18 +122,22 @@ export function Artifact() {
 
   // Reset expansion whenever the active panel changes underneath (panel
   // deactivated, switched to another literacy panel, etc.) so we never end
-  // up with an expanded overlay for a panel that isn't even active.
-  useEffect(() => {
+  // up with an expanded overlay for a panel that isn't even active. Uses the
+  // React derived-state pattern: a tracked prop value triggers a render-time
+  // state reset when the prop changes.
+  const [prevActivePanel, setPrevActivePanel] = useState(artifact?.activePanel)
+  if (artifact?.activePanel !== prevActivePanel) {
+    setPrevActivePanel(artifact?.activePanel)
     if (
       expandedPanel &&
       (artifact?.activePanel !== expandedPanel ||
-        (artifact.activePanel !== 'lewis' &&
-          artifact.activePanel !== 'wedge' &&
-          artifact.activePanel !== 'geometry'))
+        (artifact?.activePanel !== 'lewis' &&
+          artifact?.activePanel !== 'wedge' &&
+          artifact?.activePanel !== 'geometry'))
     ) {
       setExpandedPanel(null)
     }
-  }, [artifact?.activePanel, expandedPanel])
+  }
 
   useEffect(() => {
     if (!referencesOpen && !summaryOpen && !materialsOpen) return
@@ -512,13 +516,14 @@ function RightPane({
 
   // Track navigation direction so the right-pane state content slides in
   // from the right when the user advances and from the left when they go
-  // back. Falls through to 'forward' for the very first render.
-  const prevPositionRef = useRef(position)
-  const direction: 'forward' | 'back' =
-    position < prevPositionRef.current ? 'back' : 'forward'
-  useEffect(() => {
-    prevPositionRef.current = position
-  }, [position])
+  // back. Falls through to 'forward' for the very first render. Uses the
+  // React derived-state pattern: a tracked previous-position state lets us
+  // compute the direction in render and update inline when the prop changes.
+  const [prevPosition, setPrevPosition] = useState(position)
+  const direction: 'forward' | 'back' = position < prevPosition ? 'back' : 'forward'
+  if (position !== prevPosition) {
+    setPrevPosition(position)
+  }
 
   return (
     <div className="relative h-full">
@@ -966,8 +971,14 @@ function GateIndicator({
   onSkip?: () => void
 }) {
   const [showSkip, setShowSkip] = useState(false)
-  useEffect(() => {
+  // Reset the 10s skip timer whenever the gate label changes. Tracked-prop
+  // derived-state pattern keeps the reset in render rather than in an effect.
+  const [prevLabel, setPrevLabel] = useState(label)
+  if (label !== prevLabel) {
+    setPrevLabel(label)
     setShowSkip(false)
+  }
+  useEffect(() => {
     const id = window.setTimeout(() => setShowSkip(true), 10_000)
     return () => window.clearTimeout(id)
   }, [label])

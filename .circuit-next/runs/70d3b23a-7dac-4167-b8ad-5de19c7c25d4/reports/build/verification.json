@@ -1,0 +1,19 @@
+{
+  "overall_status": "passed",
+  "commands": [
+    {
+      "command_id": "build-verify",
+      "argv": [
+        "pnpm",
+        "run",
+        "verify"
+      ],
+      "cwd": ".",
+      "exit_code": 0,
+      "status": "passed",
+      "duration_ms": 2530,
+      "stdout_summary": "\n/Users/petepetrash/Code/anthropic/education-labs-takehome-main/src/components/chat/Greeting.tsx\n  26:7  warning  Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element\n\n/Users/petepetrash/Code/anthropic/education-labs-takehome-main/src/components/chat/InputBar.tsx\n  234:11  warning  Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element\n\n/Users/petepetrash/Code/anthropic/education-labs-takehome-main/src/components/chat/SparkIndicator.tsx\n  11:7  warning  Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element\n\n/Users/petepetrash/Code/anthropic/education-labs-takehome-main/src/components/chat/UserMessage.tsx\n  17:13  warning  Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element\n\n/Users/petepetrash/Code/anthropic/education-labs-takehome-main/src/components/prototype/Artifact.tsx\n  385:13  warning  Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element\n\n/Users/petepetrash/Code/anthropic/education-labs-takehome-main/src/components/prototype/RepresentationPanels.tsx\n  207:15  warning  Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element\n\n✖ 6 problems (0 errors, 6 warnings)\n\n",
+      "stderr_summary": "$ tsc --noEmit && eslint\n"
+    }
+  ]
+}

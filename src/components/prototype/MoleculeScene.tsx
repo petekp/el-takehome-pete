@@ -10,32 +10,26 @@ import type { ChipState, RepresentationPanelId } from '@/lib/prototype-store'
 /**
  * The 3D molecule viewport — the centerpiece of the artifact.
  *
- * Renders XeF2 (or its axial-strain variant) and ClF3 with sphere atoms +
- * cylinder bonds, plus optional lone-pair density clouds, an equatorial-
- * plane disc, and bond-angle annotations driven by `chipState`.
+ * The scene is built from a parameterized 5-domain configuration so the
+ * user can scrub a continuous lone-pair count (0..3) and watch the geometry
+ * morph through trigonal-bipyramidal → see-saw → T-shape → linear. Each
+ * lone pair is also draggable: the user can grab it, swing it around the
+ * central atom, and watch the molecule strain when the lone pair lands in
+ * a geometrically unfavorable (axial) position. Hover-to-inspect surfaces
+ * a small tooltip describing whichever scene element is under the cursor.
  *
- * v4 polish: each representation panel triggers a dramatic visual treatment.
+ * On top of those explorability primitives, the existing per-panel
+ * treatments (lewis/wedge/geometry) and the beat-driven `chipState` toggles
+ * still drive the rendering. The two systems coexist: the user can scrub
+ * the slider during any beat, and drag lone pairs at any time.
+ *
  *   lewis     — camera snaps to a head-on view, FOV collapses toward
- *               orthographic, scene desaturates, depth cues disappear. The
- *               molecule "flattens" into a 2D diagram.
- *   wedge     — camera holds a canonical perspective view, bonds re-render
- *               with wedge/dash visual vocabulary based on their angle to
- *               the camera. Lone pairs, equatorial plane, and angle labels
- *               are hidden.
- *   geometry  — camera holds a clean view, equatorial disc and bond-angle
- *               annotation are forced on, a floating shape-name label
- *               appears, atom colors desaturate to foreground the abstract
- *               structure. Lone pairs are hidden.
- *   default   — free orbit, all features available, no overlays.
- *
- * Other constraints:
- *   - Bret Victor aesthetic: matte materials, soft lighting, off-white bg.
- *   - Auto-rotates slowly on load to signal "this is 3D, drag me."
- *   - OrbitControls 'change' events feed a rotation accumulator the parent
- *     uses to satisfy the rotation gate at >=90 degrees.
- *   - Camera rotation is disabled while a treatment is active so the panel
- *     visuals stay legible.
- *   - Reset-view affordance in the corner.
+ *               orthographic, scene desaturates, depth cues disappear.
+ *   wedge     — bonds re-render with wedge/dash visual vocabulary based
+ *               on their angle to the camera. Lone pairs hidden.
+ *   geometry  — equatorial disc and bond-angle annotation forced on,
+ *               atom colors desaturate, lone pairs hidden.
+ *   default   — free orbit, all features available.
  */
 
 // ---------------------------------------------------------------------------
@@ -47,33 +41,51 @@ type ElementSymbol = 'Xe' | 'F' | 'Cl'
 type AtomDef = {
   element: ElementSymbol
   position: [number, number, number]
+  /** 1 = fully visible; <1 fades it (used during continuous LP-count
+   *  morphs where an equatorial seat is transitioning between atom and
+   *  lone pair). */
+  opacity?: number
+  /** Stable indices so dragging / hover keys remain consistent across
+   *  rebuilds. */
+  key: string
+  /** Whether this atom is the central (heavier) atom. */
+  isCentral?: boolean
 }
 
 type BondDef = {
-  from: number
-  to: number
+  fromKey: string
+  toKey: string
+  opacity?: number
 }
 
 type LonePairDef = {
   /** Position of the lone-pair cloud center relative to the central atom. */
   position: [number, number, number]
-  /** Direction the cloud orients along. */
+  /** Direction the cloud orients along (radial from central atom). */
   direction: [number, number, number]
+  opacity?: number
+  /** Stable identity across rebuilds so a drag in progress can keep
+   *  targeting the same lone pair. */
+  key: string
+  /** Whether this lone pair is being dragged right now. The renderer
+   *  applies a strain glow proportional to `strain`. */
+  isDragging?: boolean
+  strain?: number
 }
 
 type MoleculeData = {
   atoms: AtomDef[]
   bonds: BondDef[]
   lonePairs: LonePairDef[]
-  /** Pair of atom indices defining the bond-angle annotation (typically the
-   *  two axial F's for XeF2 → 180° label). */
-  bondAnglePair?: [number, number]
-  /** Angle in degrees displayed on the annotation. */
+  /** Pair of atom keys defining the bond-angle annotation. */
+  bondAngleKeys?: [string, string]
   bondAngle?: number
-  /** Whether the equatorial plane disc should render when the chip is on. */
   hasEquatorialPlane: boolean
-  /** Shape name shown when in geometry treatment. */
   shapeName: string
+  /** Central-atom element. Hover-to-inspect surfaces this. */
+  centralElement: ElementSymbol
+  /** Outer-atom element. */
+  outerElement: ElementSymbol
 }
 
 const BOND_LEN = 1.2
@@ -88,83 +100,169 @@ function equatorialPos(angleDeg: number, r: number): [number, number, number] {
   return [Math.cos(θ) * r, 0, Math.sin(θ) * r]
 }
 
-function xef2(): MoleculeData {
+const EQUATORIAL_ANGLES_DEG = [0, 120, 240]
+
+/**
+ * Build a 5-domain molecule data structure parameterized by lone-pair
+ * count. Continuous: a fractional `lpCount` interpolates the seat in
+ * transition between atom (opacity 1-t) and lone pair (opacity t).
+ *
+ * Rule of seating: lone pairs claim equatorial positions first (because
+ * equatorial seats have only two neighbors at 90° vs. three for axial).
+ * Axial positions hold whatever's left over.
+ *   0 LP → 5 atoms (TBP)
+ *   1 LP → 1 equatorial LP, 4 atoms (see-saw)
+ *   2 LP → 2 equatorial LPs, 3 atoms (T-shape)
+ *   3 LP → 3 equatorial LPs, 2 axial atoms (linear)
+ */
+function parameterized5Domain(
+  lpCount: number,
+  centralElement: ElementSymbol,
+  outerElement: ElementSymbol,
+): MoleculeData {
+  const clamped = Math.max(0, Math.min(3, lpCount))
+  const floor = Math.floor(clamped)
+  const frac = clamped - floor
+
+  const atoms: AtomDef[] = [
+    { element: centralElement, position: [0, 0, 0], key: 'central', isCentral: true },
+  ]
+  const bonds: BondDef[] = []
+  const lonePairs: LonePairDef[] = []
+
+  // Equatorial seats — fill with lone pairs first.
+  EQUATORIAL_ANGLES_DEG.forEach((angle, idx) => {
+    const atomPos = equatorialPos(angle, BOND_LEN)
+    const lpPos = equatorialPos(angle, LONE_PAIR_RADIAL)
+    const lpDir = equatorialPos(angle, 1)
+    const atomKey = `eq${idx}-atom`
+    const lpKey = `eq${idx}-lp`
+
+    if (idx < floor) {
+      // Full lone pair, no atom.
+      lonePairs.push({ position: lpPos, direction: lpDir, key: lpKey })
+    } else if (idx === floor && frac > 0) {
+      // Transitioning seat — both atom and lone pair, opacity blended.
+      lonePairs.push({
+        position: lpPos,
+        direction: lpDir,
+        opacity: frac,
+        key: lpKey,
+      })
+      atoms.push({
+        element: outerElement,
+        position: atomPos,
+        opacity: 1 - frac,
+        key: atomKey,
+      })
+      bonds.push({ fromKey: 'central', toKey: atomKey, opacity: 1 - frac })
+    } else {
+      // Full atom, no lone pair.
+      atoms.push({ element: outerElement, position: atomPos, key: atomKey })
+      bonds.push({ fromKey: 'central', toKey: atomKey })
+    }
+  })
+
+  // Axial seats — always atoms (lone pairs don't claim axial seats; they
+  // claim equatorial seats first because axial is geometrically tighter).
+  atoms.push({ element: outerElement, position: AXIAL_UP, key: 'ax-up' })
+  atoms.push({ element: outerElement, position: AXIAL_DOWN, key: 'ax-dn' })
+  bonds.push({ fromKey: 'central', toKey: 'ax-up' })
+  bonds.push({ fromKey: 'central', toKey: 'ax-dn' })
+
+  const shapeName =
+    clamped < 0.5
+      ? 'Trigonal bipyramidal'
+      : clamped < 1.5
+        ? 'See-saw'
+        : clamped < 2.5
+          ? 'T-shaped'
+          : 'Linear'
+
   return {
-    atoms: [
-      { element: 'Xe', position: [0, 0, 0] },
-      { element: 'F', position: AXIAL_UP },
-      { element: 'F', position: AXIAL_DOWN },
-    ],
-    bonds: [
-      { from: 0, to: 1 },
-      { from: 0, to: 2 },
-    ],
-    lonePairs: [
-      { position: equatorialPos(0, LONE_PAIR_RADIAL), direction: equatorialPos(0, 1) },
-      { position: equatorialPos(120, LONE_PAIR_RADIAL), direction: equatorialPos(120, 1) },
-      { position: equatorialPos(240, LONE_PAIR_RADIAL), direction: equatorialPos(240, 1) },
-    ],
-    bondAnglePair: [1, 2],
+    atoms,
+    bonds,
+    lonePairs,
+    bondAngleKeys: ['ax-up', 'ax-dn'],
     bondAngle: 180,
     hasEquatorialPlane: true,
-    shapeName: 'Linear',
+    shapeName,
+    centralElement,
+    outerElement,
   }
 }
 
+/**
+ * The "what if a lone pair were axial?" preset used in the axial-strain
+ * beats. One lone pair sits at axial-up, one F sits at equatorial 0°, two
+ * lone pairs sit at the other equatorial positions, one F stays axial-down.
+ * Hand-authored because it's a non-equilibrium configuration that the
+ * parameterized 5-domain function (which always seats LPs equatorial first)
+ * can't produce.
+ */
 function xef2AxialStrain(): MoleculeData {
   return {
     atoms: [
-      { element: 'Xe', position: [0, 0, 0] },
-      { element: 'F', position: AXIAL_DOWN },
-      { element: 'F', position: equatorialPos(0, BOND_LEN) },
+      { element: 'Xe', position: [0, 0, 0], key: 'central', isCentral: true },
+      { element: 'F', position: AXIAL_DOWN, key: 'ax-dn' },
+      { element: 'F', position: equatorialPos(0, BOND_LEN), key: 'eq0-atom' },
     ],
     bonds: [
-      { from: 0, to: 1 },
-      { from: 0, to: 2 },
+      { fromKey: 'central', toKey: 'ax-dn' },
+      { fromKey: 'central', toKey: 'eq0-atom' },
     ],
     lonePairs: [
-      { position: [0, LONE_PAIR_RADIAL, 0], direction: [0, 1, 0] },
-      { position: equatorialPos(120, LONE_PAIR_RADIAL), direction: equatorialPos(120, 1) },
-      { position: equatorialPos(240, LONE_PAIR_RADIAL), direction: equatorialPos(240, 1) },
+      { position: [0, LONE_PAIR_RADIAL, 0], direction: [0, 1, 0], key: 'ax-up-lp' },
+      {
+        position: equatorialPos(120, LONE_PAIR_RADIAL),
+        direction: equatorialPos(120, 1),
+        key: 'eq1-lp',
+      },
+      {
+        position: equatorialPos(240, LONE_PAIR_RADIAL),
+        direction: equatorialPos(240, 1),
+        key: 'eq2-lp',
+      },
     ],
     hasEquatorialPlane: true,
     shapeName: 'Strained',
+    centralElement: 'Xe',
+    outerElement: 'F',
   }
 }
 
-function clf3(): MoleculeData {
-  return {
-    atoms: [
-      { element: 'Cl', position: [0, 0, 0] },
-      { element: 'F', position: AXIAL_UP },
-      { element: 'F', position: AXIAL_DOWN },
-      { element: 'F', position: equatorialPos(0, BOND_LEN) },
-    ],
-    bonds: [
-      { from: 0, to: 1 },
-      { from: 0, to: 2 },
-      { from: 0, to: 3 },
-    ],
-    lonePairs: [
-      { position: equatorialPos(120, LONE_PAIR_RADIAL), direction: equatorialPos(120, 1) },
-      { position: equatorialPos(240, LONE_PAIR_RADIAL), direction: equatorialPos(240, 1) },
-    ],
-    bondAnglePair: [1, 2],
-    bondAngle: 180,
-    hasEquatorialPlane: true,
-    shapeName: 'T-shaped',
+function moleculeNaturalLpCount(name: Molecule): number {
+  switch (name) {
+    case 'xef2':
+      return 3
+    case 'clf3':
+      return 2
+    case 'xef2-axial-strain':
+      return 3
   }
+}
+
+function moleculeCentralOuter(
+  name: Molecule,
+): { central: ElementSymbol; outer: ElementSymbol } {
+  if (name === 'clf3') return { central: 'Cl', outer: 'F' }
+  return { central: 'Xe', outer: 'F' }
+}
+
+/**
+ * Compute the molecule data for the current scene. Five-domain molecules
+ * are routed through the parameterized builder so the slider can morph the
+ * lone-pair count continuously; the axial-strain preset is hand-authored
+ * because it's a non-equilibrium configuration the builder can't produce.
+ */
+function effectiveMoleculeData(name: Molecule, lpCount: number): MoleculeData {
+  if (name === 'xef2-axial-strain') return xef2AxialStrain()
+  const { central, outer } = moleculeCentralOuter(name)
+  return parameterized5Domain(lpCount, central, outer)
 }
 
 export function moleculeData(name: Molecule): MoleculeData {
-  switch (name) {
-    case 'xef2':
-      return xef2()
-    case 'xef2-axial-strain':
-      return xef2AxialStrain()
-    case 'clf3':
-      return clf3()
-  }
+  return effectiveMoleculeData(name, moleculeNaturalLpCount(name))
 }
 
 const ATOM_RADIUS: Record<ElementSymbol, number> = {
@@ -179,6 +277,18 @@ const ATOM_COLOR: Record<ElementSymbol, number> = {
   Cl: 0x7a8f3e,
 }
 
+const ATOMIC_NUMBER: Record<ElementSymbol, number> = {
+  Xe: 54,
+  F: 9,
+  Cl: 17,
+}
+
+const ELECTRON_CONFIG: Record<ElementSymbol, string> = {
+  Xe: '[Kr] 4d¹⁰ 5s² 5p⁶',
+  F: '[He] 2s² 2p⁵',
+  Cl: '[Ne] 3s² 3p⁵',
+}
+
 const BOND_RADIUS = 0.07
 const BOND_COLOR = 0x9a958e
 const BOND_TOWARD_COLOR = 0x4a4540
@@ -186,6 +296,7 @@ const BOND_AWAY_COLOR = 0x6b665e
 
 const LONE_PAIR_COLOR = 0x6b46c1
 const LONE_PAIR_OPACITY = 0.62
+const LONE_PAIR_STRAIN_COLOR = 0xd97a3b
 
 const EQUATORIAL_PLANE_COLOR = 0xc6b8e8
 const EQUATORIAL_PLANE_OPACITY = 0.18
@@ -209,11 +320,6 @@ type TreatmentTarget = {
 }
 
 const DEFAULT_CAM = new THREE.Vector3(3.2, 1.6, 4.6)
-// Head-on, telephoto-leaning so the scene reads as a "flat" Lewis-style
-// diagram. The combination of FOV 25 and distance 9 gives the molecule the
-// same projected size as the default treatment (after safeAreaZoom), so the
-// axial F's stay comfortably inside the safe rectangle and don't slip under
-// the header overlay.
 const LEWIS_CAM = new THREE.Vector3(0, 0, 9)
 const WEDGE_CAM = new THREE.Vector3(3.6, 1.0, 4.0)
 const GEOMETRY_CAM = new THREE.Vector3(3.0, 1.4, 4.6)
@@ -258,26 +364,6 @@ type SafeInsets = {
   bottom: number
 }
 
-/**
- * Shift the rendered molecule so it sits centered in the "safe area" — the
- * canvas minus the overlaid UI on each edge. Uses Three.js's view-offset
- * mechanism: tell the camera it's rendering a sub-window of a virtual
- * viewport that is `top + bottom` taller and `right` wider, with our window
- * aligned so the molecule (otherwise at virtual center) ends up at the safe
- * area's center within our actual canvas.
- *
- * Math: setViewOffset(fullW, fullH, offX, offY, w, h). Molecule at virtual
- * center = (fullW/2, fullH/2). Its position in our window = virtual center −
- * (offX, offY). For the molecule to appear at the safe area center we want:
- *   - x: (W − rightInset)/2 → offX = rightInset
- *   - y: (H + topInset − bottomInset)/2 → offY = bottomInset
- * Then fullW = W + rightInset, fullH = H + topInset + bottomInset gives the
- * desired projection. Left inset is 0 by convention here (we don't overlay
- * on the left).
- *
- * Pixel ratios cancel out — fullW/fullH and w/h share units, so passing CSS
- * pixels works regardless of devicePixelRatio.
- */
 function applyViewOffset(
   camera: THREE.PerspectiveCamera,
   width: number,
@@ -295,25 +381,10 @@ function applyViewOffset(
   camera.setViewOffset(fullW, fullH, insets.right, insets.bottom, width, height)
 }
 
-/**
- * Compute the zoom factor that scales the projection so the molecule fits
- * within the safe area (canvas minus overlaid UI). Used for the initial view
- * and Reset View; user dolly/pan can take the molecule outside the safe
- * area, which is fine. Only applied to the default treatment; the panel
- * treatments (lewis/wedge/geometry) keep zoom=1 so their carefully tuned
- * camera positions and FOVs aren't distorted.
- *
- * Picks the more constraining axis (the molecule must fit both horizontally
- * and vertically) so the safe area never overflows.
- */
 function safeAreaZoom(width: number, height: number, insets: SafeInsets): number {
   if (width <= 0 || height <= 0) return 1
   const horizRatio = (width - insets.right) / width
   const vertRatio = (height - insets.top - insets.bottom) / height
-  // The 0.95 multiplier leaves a small visual margin inside the safe area
-  // without aggressively shrinking the molecule. (Previously 0.8 when bonds
-  // were 1.5 long; with the now-shorter 1.2 bonds the molecule has more
-  // headroom, so we can let it fill more of the safe rectangle.)
   const ratio = Math.min(horizRatio, vertRatio) * 0.95
   return Math.max(0.3, Math.min(1, ratio))
 }
@@ -324,13 +395,87 @@ function targetZoomForTreatment(
   height: number,
   insets: SafeInsets,
 ): number {
-  // All treatments share the safe-area zoom so the molecule always fits in
-  // the rectangle left by the overlaid UI. Originally only `default` used
-  // this and panel treatments stayed at zoom=1, which combined with their
-  // specific FOVs/camera positions could clip the molecule (most visibly
-  // Lewis at FOV 8) or push it under the right pane.
   return safeAreaZoom(width, height, insets)
 }
+
+// ---------------------------------------------------------------------------
+// Hover-tooltip semantics. Each scene object carries a typed `inspect`
+// userData payload, computed at build time from the molecule data, that the
+// raycaster reads when the pointer hovers over it.
+// ---------------------------------------------------------------------------
+
+type InspectAtom = {
+  kind: 'atom'
+  element: ElementSymbol
+  role: 'central' | 'bonded'
+}
+type InspectBond = {
+  kind: 'bond'
+  from: ElementSymbol
+  to: ElementSymbol
+  lengthAngstroms: number
+}
+type InspectLonePair = {
+  kind: 'lone-pair'
+  central: ElementSymbol
+}
+type InspectPlane = { kind: 'equatorial-plane' }
+type InspectAngle = { kind: 'angle'; degrees: number; description: string }
+
+type InspectPayload =
+  | InspectAtom
+  | InspectBond
+  | InspectLonePair
+  | InspectPlane
+  | InspectAngle
+
+const ELEMENT_LABEL: Record<ElementSymbol, string> = {
+  Xe: 'Xenon',
+  F: 'Fluorine',
+  Cl: 'Chlorine',
+}
+
+function inspectTitle(p: InspectPayload): string {
+  switch (p.kind) {
+    case 'atom':
+      return `${ELEMENT_LABEL[p.element]} (${p.element})`
+    case 'bond':
+      return `${p.from}–${p.to} bond`
+    case 'lone-pair':
+      return `Lone pair on ${p.central}`
+    case 'equatorial-plane':
+      return 'Equatorial plane'
+    case 'angle':
+      return `${p.degrees.toFixed(0)}°`
+  }
+}
+
+function inspectLines(p: InspectPayload): string[] {
+  switch (p.kind) {
+    case 'atom':
+      return [
+        `Atomic number: ${ATOMIC_NUMBER[p.element]}`,
+        `Config: ${ELECTRON_CONFIG[p.element]}`,
+        p.role === 'central' ? 'Central atom' : 'Bonded atom',
+      ]
+    case 'bond':
+      return [
+        'Single bond (σ)',
+        `Length ≈ ${p.lengthAngstroms.toFixed(2)} Å`,
+        'Bond order 1',
+      ]
+    case 'lone-pair':
+      return ['Non-bonding electron pair', 'Drag to reposition']
+    case 'equatorial-plane':
+      return ['The three equatorial seats in the trigonal bipyramid.']
+    case 'angle':
+      return [p.description]
+  }
+}
+
+const USERDATA_INSPECT = 'inspect'
+const USERDATA_LP_KEY = 'lpKey'
+const USERDATA_LP_STRAIN_GLOW = 'lpGlow'
 
 // ---------------------------------------------------------------------------
 // Scene component
@@ -348,13 +493,6 @@ type MoleculeSceneProps = {
    *  treatment is active. The parent should clear `activePanel` in response;
    *  Reset View always resets the camera locally before this fires. */
   onExitTreatment?: () => void
-  /** Reserved space (CSS pixels) on each edge of the canvas for overlaid UI:
-   *  - `top`    — typically the affixed header
-   *  - `right`  — typically the floating right pane
-   *  - `bottom` — typically the representation-panels row
-   *  The projection is offset so the molecule renders centered in the
-   *  resulting safe area, and the camera zooms out so it fits within.
-   *  Default 0 on each edge (no inset). */
   topOverlayInsetPx?: number
   rightOverlayInsetPx?: number
   bottomOverlayInsetPx?: number
@@ -380,14 +518,78 @@ export function MoleculeScene({
     controls: OrbitControls
     moleculeGroup: THREE.Group
     resetView: () => void
-    /** Cache the camera forward at last build so wedge geometry stays stable
-     *  for the duration of the treatment. */
     lastBuildForward: THREE.Vector3
+    /** Map of LP key → mesh group, used by the drag handler to update the
+     *  dragged lone pair's position imperatively each frame. */
+    lpMeshes: Map<string, THREE.Object3D>
+    /** Map of LP key → strain glow mesh (for drag feedback). */
+    lpGlowMeshes: Map<string, THREE.Mesh>
+    /** Map of atom key → mesh, used by the deformation pass to push other
+     *  atoms away from the dragged lone pair. */
+    atomMeshes: Map<string, THREE.Mesh>
+    /** Cylinder-bond meshes (default treatment only) tracked so they can
+     *  follow atoms as the deformation moves them. */
+    bondMeshes: BondMeshInfo[]
   } | null>(null)
 
-  const data = useMemo(() => moleculeData(molecule), [molecule])
   const treatment = panelToTreatment(activePanel ?? null)
   const [filterCss, setFilterCss] = useState<string>('none')
+
+  // --- Slider: continuous lone-pair count. -------------------------------
+  // The slider is hidden for the axial-strain preset (a hand-authored
+  // non-equilibrium configuration the parameterized builder can't reproduce).
+  const sliderEnabled = molecule !== 'xef2-axial-strain'
+  const [sliderLp, setSliderLp] = useState<number>(moleculeNaturalLpCount(molecule))
+  const [trackedMolecule, setTrackedMolecule] = useState<Molecule>(molecule)
+  if (trackedMolecule !== molecule) {
+    setTrackedMolecule(molecule)
+    setSliderLp(moleculeNaturalLpCount(molecule))
+  }
+
+  // --- Drag: tracked entirely outside React state. The pointer handler
+  //     updates the dragged LP's mesh imperatively each frame; React only
+  //     learns about the drag through scene rebuilds (slider scrubs, beat
+  //     changes), which is fine because rebuilds during a drag are rare
+  //     and the next pointermove would re-apply the override anyway.
+  /** Override position for the dragged LP. The pointermove handler writes
+   *  this; the RAF tick (for snap-back) reads it. Never read during render. */
+  const dragOverrideRef = useRef<{
+    key: string
+    position: [number, number, number]
+    direction: [number, number, number]
+    strain: number
+  } | null>(null)
+  /** Snap-back animation: when the user releases, the LP eases back to its
+   *  stable target position. */
+  const snapBackRef = useRef<{
+    key: string
+    fromPos: [number, number, number]
+    toPos: [number, number, number]
+    fromDir: [number, number, number]
+    toDir: [number, number, number]
+    fromStrain: number
+    startTs: number
+    durationMs: number
+  } | null>(null)
+
+  const data = useMemo(
+    () => effectiveMoleculeData(molecule, sliderLp),
+    [molecule, sliderLp],
+  )
+  // The mount-effect's RAF tick needs the latest canonical molecule data so
+  // the snap-back animation can deform the rest of the molecule alongside
+  // the dragged LP. The tick reads dataRef.current each frame.
+  const dataRef = useRef(data)
+  useEffect(() => {
+    dataRef.current = data
+  }, [data])
+
+  // --- Hover tooltip overlay state. --------------------------------------
+  const [hover, setHover] = useState<{
+    x: number
+    y: number
+    payload: InspectPayload
+  } | null>(null)
 
   // Refs the resize observer (inside the mount-once effect) reads to compute
   // the right safe-area zoom for the current treatment.
@@ -401,8 +603,6 @@ export function MoleculeScene({
     onRotationDeltaRef.current = onRotationDelta
   }, [onRotationDelta])
 
-  // Cached so the resize observer (inside the mount-once effect) reads the
-  // latest insets without forcing a full scene rebuild on prop change.
   const insetsRef = useRef<SafeInsets>({
     top: topOverlayInsetPx,
     right: rightOverlayInsetPx,
@@ -460,19 +660,12 @@ export function MoleculeScene({
     controls.dampingFactor = 0.08
     controls.enablePan = false
     controls.minDistance = 2.8
-    // maxDistance 12 lets the telephoto-leaning Lewis treatment (camera at
-    // z=9) sit inside the controls' allowed range; without this the controls
-    // would clamp the position back to 8 after the treatment animation
-    // settled and the user touched the molecule.
     controls.maxDistance = 12
     controls.target.set(0, 0, 0)
     controls.autoRotate = true
     controls.autoRotateSpeed = 0.6
     controls.update()
 
-    // Rotation accumulator — track the spherical angle change per frame and
-    // notify parent with positive deltas. autoRotate's contribution doesn't
-    // count toward the gate; we only forward deltas from user interaction.
     let lastAzimuth = controls.getAzimuthalAngle()
     let lastPolar = controls.getPolarAngle()
     let userInteracting = false
@@ -493,7 +686,22 @@ export function MoleculeScene({
 
     const lastBuildForward = new THREE.Vector3()
     camera.getWorldDirection(lastBuildForward)
-    buildScene(moleculeGroup, data, chipState, 'default', lastBuildForward, false)
+    const lpMeshes = new Map<string, THREE.Object3D>()
+    const lpGlowMeshes = new Map<string, THREE.Mesh>()
+    const atomMeshes = new Map<string, THREE.Mesh>()
+    const bondMeshes: BondMeshInfo[] = []
+    buildScene(
+      moleculeGroup,
+      effectiveMoleculeData(molecule, moleculeNaturalLpCount(molecule)),
+      chipState,
+      'default',
+      lastBuildForward,
+      false,
+      lpMeshes,
+      lpGlowMeshes,
+      atomMeshes,
+      bondMeshes,
+    )
 
     const resetView = () => {
       camera.position.copy(DEFAULT_CAM)
@@ -505,12 +713,48 @@ export function MoleculeScene({
     const tick = () => {
       controls.update()
 
+      // Snap-back animation: ease the dragged LP back to its stable target
+      // after release. The deformation pass re-runs each frame so other atoms
+      // and lone pairs glide back to their canonical seats alongside the
+      // dragged LP, then we explicitly clear the deformation on the final
+      // frame to remove any residual sub-pixel drift.
+      const sb = snapBackRef.current
+      if (sb) {
+        const now = performance.now()
+        const t = Math.min((now - sb.startTs) / sb.durationMs, 1)
+        const eased = 1 - Math.pow(1 - t, 3)
+        const pos: [number, number, number] = [
+          sb.fromPos[0] + (sb.toPos[0] - sb.fromPos[0]) * eased,
+          sb.fromPos[1] + (sb.toPos[1] - sb.fromPos[1]) * eased,
+          sb.fromPos[2] + (sb.toPos[2] - sb.fromPos[2]) * eased,
+        ]
+        const drd: [number, number, number] = [
+          sb.fromDir[0] + (sb.toDir[0] - sb.fromDir[0]) * eased,
+          sb.fromDir[1] + (sb.toDir[1] - sb.fromDir[1]) * eased,
+          sb.fromDir[2] + (sb.toDir[2] - sb.fromDir[2]) * eased,
+        ]
+        const strain = sb.fromStrain * (1 - eased)
+        applyLpOverride(lpMeshes, lpGlowMeshes, sb.key, pos, drd, strain)
+        const currentData = dataRef.current
+        applyDeformation(
+          sb.key,
+          new THREE.Vector3(drd[0], drd[1], drd[2]),
+          currentData,
+          atomMeshes,
+          bondMeshes,
+          lpMeshes,
+        )
+        if (t >= 1) {
+          clearDeformation(currentData, atomMeshes, bondMeshes, lpMeshes)
+          snapBackRef.current = null
+        }
+      }
+
       if (userInteracting) {
         const az = controls.getAzimuthalAngle()
         const pol = controls.getPolarAngle()
         const dAz = Math.abs(az - lastAzimuth)
         const dPol = Math.abs(pol - lastPolar)
-        // Wrap-around guard: ignore jumps larger than ~90° per frame.
         const delta = (dAz < Math.PI / 2 ? dAz : 0) + (dPol < Math.PI / 2 ? dPol : 0)
         if (delta > 0) onRotationDeltaRef.current?.(delta)
         lastAzimuth = az
@@ -530,8 +774,6 @@ export function MoleculeScene({
         camera.aspect = w / h
         camera.updateProjectionMatrix()
         applyViewOffset(camera, w, h, insetsRef.current)
-        // Re-apply safe-area zoom for the current treatment so the molecule
-        // stays appropriately scaled when the viewport size changes.
         camera.zoom = targetZoomForTreatment(
           currentTreatmentRef.current,
           w,
@@ -551,6 +793,10 @@ export function MoleculeScene({
       moleculeGroup,
       resetView,
       lastBuildForward,
+      lpMeshes,
+      lpGlowMeshes,
+      atomMeshes,
+      bondMeshes,
     }
 
     return () => {
@@ -579,8 +825,6 @@ export function MoleculeScene({
     if (!r) return
     const target = TREATMENT_TARGETS[treatment]
 
-    // Disable user rotation immediately for non-default treatments so the
-    // canonical view stays put through the animation.
     r.controls.autoRotate = false
     r.controls.enableRotate = target.enableRotate
 
@@ -614,11 +858,13 @@ export function MoleculeScene({
       r.controls.target.set(0, 0, 0)
 
       if (t >= 1) {
-        // Rebuild the molecule using the post-animation camera forward so
-        // wedge geometry reflects the final view.
         r.camera.getWorldDirection(r.lastBuildForward)
         disposeGroup(r.moleculeGroup)
         r.moleculeGroup.clear()
+        r.lpMeshes.clear()
+        r.lpGlowMeshes.clear()
+        r.atomMeshes.clear()
+        r.bondMeshes.length = 0
         buildScene(
           r.moleculeGroup,
           data,
@@ -626,6 +872,10 @@ export function MoleculeScene({
           treatment,
           r.lastBuildForward,
           true,
+          r.lpMeshes,
+          r.lpGlowMeshes,
+          r.atomMeshes,
+          r.bondMeshes,
         )
         return
       }
@@ -641,7 +891,9 @@ export function MoleculeScene({
     }
   }, [treatment, data, chipState])
 
-  // Rebuild on molecule or chipState change (cross-fade molecule swap).
+  // Rebuild on molecule data change (cross-fade molecule swap when topology
+  // changes, immediate rebuild for slider-driven LP-count changes since the
+  // continuous morph already handles smoothness).
   const prevDataRef = useRef<MoleculeData | null>(null)
   useEffect(() => {
     const r = refs.current
@@ -649,13 +901,35 @@ export function MoleculeScene({
     const prev = prevDataRef.current
     prevDataRef.current = data
     const isInitial = prev === null
-    const dataChanged = !isInitial && prev !== data
+    // Topology change → atom or lp keys differ. Slider scrub keeps the same
+    // keys so we don't want to cross-fade for every micro-update.
+    const sameTopology =
+      prev &&
+      prev.atoms.length === data.atoms.length &&
+      prev.lonePairs.length === data.lonePairs.length &&
+      prev.atoms.every((a, i) => a.key === data.atoms[i]?.key) &&
+      prev.lonePairs.every((lp, i) => lp.key === data.lonePairs[i]?.key)
 
-    if (isInitial || !dataChanged) {
+    if (isInitial || sameTopology) {
       r.camera.getWorldDirection(r.lastBuildForward)
       disposeGroup(r.moleculeGroup)
       r.moleculeGroup.clear()
-      buildScene(r.moleculeGroup, data, chipState, treatment, r.lastBuildForward, true)
+      r.lpMeshes.clear()
+      r.lpGlowMeshes.clear()
+      r.atomMeshes.clear()
+      r.bondMeshes.length = 0
+      buildScene(
+        r.moleculeGroup,
+        data,
+        chipState,
+        treatment,
+        r.lastBuildForward,
+        true,
+        r.lpMeshes,
+        r.lpGlowMeshes,
+        r.atomMeshes,
+        r.bondMeshes,
+      )
       return
     }
 
@@ -679,7 +953,22 @@ export function MoleculeScene({
           r.camera.getWorldDirection(r.lastBuildForward)
           disposeGroup(r.moleculeGroup)
           r.moleculeGroup.clear()
-          buildScene(r.moleculeGroup, data, chipState, treatment, r.lastBuildForward, true)
+          r.lpMeshes.clear()
+          r.lpGlowMeshes.clear()
+          r.atomMeshes.clear()
+          r.bondMeshes.length = 0
+          buildScene(
+            r.moleculeGroup,
+            data,
+            chipState,
+            treatment,
+            r.lastBuildForward,
+            true,
+            r.lpMeshes,
+            r.lpGlowMeshes,
+            r.atomMeshes,
+            r.bondMeshes,
+          )
           applyTransitionScalar(r.moleculeGroup, 0)
           phase = 'in'
           phaseStart = performance.now()
@@ -703,6 +992,204 @@ export function MoleculeScene({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, chipState])
 
+  // --- Pointer interactions: hover-to-inspect, drag-to-reposition. -------
+  useEffect(() => {
+    const refsSnapshot = refs.current
+    if (!refsSnapshot) return
+    const r = refsSnapshot
+    const canvas = r.renderer.domElement
+
+    const raycaster = new THREE.Raycaster()
+    const pointer = new THREE.Vector2()
+    const dragPlanePoint = new THREE.Vector3()
+    let hoverTimeout: number | null = null
+    let activeDrag: { key: string } | null = null
+
+    const setPointerFromEvent = (e: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect()
+      pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
+      pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
+    }
+
+    const intersect = (): THREE.Intersection[] => {
+      raycaster.setFromCamera(pointer, r.camera)
+      return raycaster.intersectObject(r.moleculeGroup, true)
+    }
+
+    const findInspectable = (hits: THREE.Intersection[]): {
+      payload: InspectPayload
+      lpKey?: string
+    } | null => {
+      for (const hit of hits) {
+        let obj: THREE.Object3D | null = hit.object
+        while (obj) {
+          const payload = obj.userData[USERDATA_INSPECT] as InspectPayload | undefined
+          if (payload) {
+            const lpKey = obj.userData[USERDATA_LP_KEY] as string | undefined
+            return { payload, lpKey }
+          }
+          obj = obj.parent
+        }
+      }
+      return null
+    }
+
+    const onPointerMove = (e: PointerEvent) => {
+      setPointerFromEvent(e)
+
+      // Drag in progress: project pointer onto a sphere of radius
+      // LONE_PAIR_RADIAL around the central atom and update the LP.
+      if (activeDrag) {
+        raycaster.setFromCamera(pointer, r.camera)
+        const origin = raycaster.ray.origin
+        const dir = raycaster.ray.direction
+        // Sphere of radius R at origin. Solve (origin + t*dir)·(origin + t*dir) = R^2.
+        const R = LONE_PAIR_RADIAL
+        const a = dir.dot(dir)
+        const b = 2 * origin.dot(dir)
+        const c = origin.dot(origin) - R * R
+        const disc = b * b - 4 * a * c
+        const pt = new THREE.Vector3()
+        if (disc >= 0) {
+          const sq = Math.sqrt(disc)
+          const t1 = (-b - sq) / (2 * a)
+          const t2 = (-b + sq) / (2 * a)
+          const t = t1 > 0 ? t1 : t2
+          pt.copy(origin).add(dir.clone().multiplyScalar(t))
+        } else {
+          // Pointer ray misses the sphere — drop a perpendicular from the
+          // center onto the ray, normalize to the sphere surface.
+          const closestT = -origin.dot(dir) / a
+          pt.copy(origin).add(dir.clone().multiplyScalar(closestT))
+          pt.setLength(R)
+        }
+        dragPlanePoint.copy(pt)
+        // Strain: count the dragged LP's neighbors at < 100° angular
+        // distance, weighted by 1/(angle^2). Equatorial seats have two
+        // neighbors at 90°; axial seats have three at 90° — the latter
+        // produces a noticeably higher strain, which we render as a glow.
+        const normalized = pt.clone().normalize()
+        const strain = computeStrainAtDirection(normalized, data, activeDrag.key)
+        const position: [number, number, number] = [pt.x, pt.y, pt.z]
+        const direction: [number, number, number] = [
+          normalized.x,
+          normalized.y,
+          normalized.z,
+        ]
+        dragOverrideRef.current = {
+          key: activeDrag.key,
+          position,
+          direction,
+          strain,
+        }
+        applyLpOverride(r.lpMeshes, r.lpGlowMeshes, activeDrag.key, position, direction, strain)
+        applyDeformation(
+          activeDrag.key,
+          normalized,
+          data,
+          r.atomMeshes,
+          r.bondMeshes,
+          r.lpMeshes,
+        )
+        return
+      }
+
+      // Hover-to-inspect path. Throttle by clearing any pending tooltip
+      // schedule and re-scheduling with a short delay so the tooltip
+      // doesn't flicker as the cursor moves across a single element.
+      const hits = intersect()
+      const found = findInspectable(hits)
+      if (!found) {
+        if (hoverTimeout !== null) {
+          window.clearTimeout(hoverTimeout)
+          hoverTimeout = null
+        }
+        setHover(null)
+        canvas.style.cursor = 'default'
+        return
+      }
+
+      canvas.style.cursor = found.lpKey ? 'grab' : 'default'
+
+      if (hoverTimeout !== null) window.clearTimeout(hoverTimeout)
+      const rect = canvas.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      const y = e.clientY - rect.top
+      // Immediate update of position so the tooltip tracks the cursor; the
+      // payload itself is cheap to update too.
+      setHover({ x, y, payload: found.payload })
+    }
+
+    const onPointerLeave = () => {
+      if (hoverTimeout !== null) {
+        window.clearTimeout(hoverTimeout)
+        hoverTimeout = null
+      }
+      setHover(null)
+      canvas.style.cursor = 'default'
+    }
+
+    const onPointerDown = (e: PointerEvent) => {
+      setPointerFromEvent(e)
+      const hits = intersect()
+      const found = findInspectable(hits)
+      if (!found || !found.lpKey) return
+      e.preventDefault()
+      e.stopPropagation()
+      activeDrag = { key: found.lpKey }
+      // Cancel any in-flight snap-back targeting the same LP.
+      if (snapBackRef.current && snapBackRef.current.key === found.lpKey) {
+        snapBackRef.current = null
+      }
+      r.controls.enabled = false
+      canvas.style.cursor = 'grabbing'
+      canvas.setPointerCapture?.(e.pointerId)
+    }
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (!activeDrag) return
+      const key = activeDrag.key
+      const override = dragOverrideRef.current
+      activeDrag = null
+      r.controls.enabled = true
+      canvas.style.cursor = 'default'
+      canvas.releasePointerCapture?.(e.pointerId)
+
+      // Snap back: ease toward the LP's stable target position. For the
+      // parameterized 5-domain molecules the stable seats are equatorial;
+      // pick the nearest one to where the user released.
+      if (override) {
+        const fromPos = override.position
+        const fromDir = override.direction
+        const target = nearestStableSeatForLp(key, override.direction, data)
+        snapBackRef.current = {
+          key,
+          fromPos,
+          toPos: target.position,
+          fromDir,
+          toDir: target.direction,
+          fromStrain: override.strain,
+          startTs: performance.now(),
+          durationMs: 380,
+        }
+      }
+      dragOverrideRef.current = null
+    }
+
+    canvas.addEventListener('pointermove', onPointerMove)
+    canvas.addEventListener('pointerleave', onPointerLeave)
+    canvas.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('pointerup', onPointerUp)
+
+    return () => {
+      canvas.removeEventListener('pointermove', onPointerMove)
+      canvas.removeEventListener('pointerleave', onPointerLeave)
+      canvas.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('pointerup', onPointerUp)
+      if (hoverTimeout !== null) window.clearTimeout(hoverTimeout)
+    }
+  }, [data])
+
   return (
     <div className={cn('relative size-full', className)}>
       <div
@@ -724,6 +1211,223 @@ export function MoleculeScene({
         topInsetPx={topOverlayInsetPx}
         rightInsetPx={rightOverlayInsetPx}
       />
+      {sliderEnabled && (
+        <LonePairSlider
+          value={sliderLp}
+          onChange={setSliderLp}
+          rightInsetPx={rightOverlayInsetPx}
+          bottomInsetPx={bottomOverlayInsetPx}
+        />
+      )}
+      {hover && <InspectTooltip x={hover.x} y={hover.y} payload={hover.payload} />}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Strain computation + stable-seat picking for drag.
+// ---------------------------------------------------------------------------
+
+/**
+ * Approximate VSEPR strain: sum of inverse-squared angular distances from
+ * the test direction to every other electron pair (atom or lone pair).
+ * Axial positions have three neighbors at 90°, equatorial only two — so
+ * axial drag produces a notably higher score, which we map to a glow.
+ */
+function computeStrainAtDirection(
+  dirNorm: THREE.Vector3,
+  data: MoleculeData,
+  ownLpKey: string,
+): number {
+  const others: THREE.Vector3[] = []
+  for (const atom of data.atoms) {
+    if (atom.isCentral) continue
+    const v = new THREE.Vector3(...atom.position)
+    if (v.length() < 1e-3) continue
+    others.push(v.normalize())
+  }
+  for (const lp of data.lonePairs) {
+    if (lp.key === ownLpKey) continue
+    const v = new THREE.Vector3(...lp.direction)
+    if (v.length() < 1e-3) continue
+    others.push(v.normalize())
+  }
+  let total = 0
+  for (const o of others) {
+    const cos = THREE.MathUtils.clamp(dirNorm.dot(o), -1, 1)
+    const angle = Math.acos(cos) // radians, 0..π
+    if (angle < 0.05) return 4 // overlap — max strain
+    total += 1 / (angle * angle)
+  }
+  // Normalize to 0..1 range where 1 ≈ "axial in a 5-domain system, lone
+  // pair surrounded by three neighbors at 90°".
+  return Math.min(1, total / 8)
+}
+
+/**
+ * Find the stable seat for a given lone pair on release. For a 5-domain
+ * molecule, lone pairs prefer equatorial seats; pick the equatorial
+ * direction with the lowest residual strain that isn't already occupied by
+ * another lone pair.
+ */
+function nearestStableSeatForLp(
+  ownLpKey: string,
+  currentDir: [number, number, number],
+  data: MoleculeData,
+): { position: [number, number, number]; direction: [number, number, number] } {
+  const occupied = new Set<string>()
+  for (const lp of data.lonePairs) {
+    if (lp.key === ownLpKey) continue
+    occupied.add(seatLabelForDirection(new THREE.Vector3(...lp.direction)))
+  }
+  for (const atom of data.atoms) {
+    if (atom.isCentral) continue
+    const v = new THREE.Vector3(...atom.position)
+    if (v.length() < 1e-3) continue
+    occupied.add(seatLabelForDirection(v.normalize()))
+  }
+  const cur = new THREE.Vector3(...currentDir).normalize()
+  const candidates: { label: string; dir: THREE.Vector3 }[] = EQUATORIAL_ANGLES_DEG.map(
+    (a) => ({
+      label: `eq:${a}`,
+      dir: new THREE.Vector3(...equatorialPos(a, 1)),
+    }),
+  )
+  // Prefer unoccupied seats with the smallest angular distance to where
+  // the user released. If all equatorial seats are occupied (shouldn't
+  // happen at 3 LPs because the dragged one is excluded), fall back to
+  // the closest seat regardless.
+  candidates.sort((a, b) => {
+    const aOcc = occupied.has(a.label) ? 1 : 0
+    const bOcc = occupied.has(b.label) ? 1 : 0
+    if (aOcc !== bOcc) return aOcc - bOcc
+    return cur.angleTo(b.dir) - cur.angleTo(a.dir) > 0 ? -1 : 1
+  })
+  const chosen = candidates[0]!.dir
+  return {
+    position: [
+      chosen.x * LONE_PAIR_RADIAL,
+      chosen.y * LONE_PAIR_RADIAL,
+      chosen.z * LONE_PAIR_RADIAL,
+    ],
+    direction: [chosen.x, chosen.y, chosen.z],
+  }
+}
+
+function seatLabelForDirection(dir: THREE.Vector3): string {
+  if (Math.abs(dir.y) > 0.85) return dir.y > 0 ? 'ax:up' : 'ax:dn'
+  let bestAngle = Math.PI
+  let bestLabel = 'eq:0'
+  for (const a of EQUATORIAL_ANGLES_DEG) {
+    const v = new THREE.Vector3(...equatorialPos(a, 1))
+    const ang = dir.angleTo(v)
+    if (ang < bestAngle) {
+      bestAngle = ang
+      bestLabel = `eq:${a}`
+    }
+  }
+  return bestLabel
+}
+
+// ---------------------------------------------------------------------------
+// Slider + tooltip overlays.
+// ---------------------------------------------------------------------------
+
+function LonePairSlider({
+  value,
+  onChange,
+  rightInsetPx,
+  bottomInsetPx,
+}: {
+  value: number
+  onChange: (v: number) => void
+  rightInsetPx: number
+  bottomInsetPx: number
+}) {
+  // Sit above the representation-panels row, anchored along the left side
+  // of the safe area. Width clamps to a reasonable horizontal span so the
+  // tick labels stay legible.
+  const bottom = bottomInsetPx > 0 ? bottomInsetPx - 4 : 12
+  const right = rightInsetPx > 0 ? rightInsetPx + 8 : 12
+  const shapeLabel = (n: number) =>
+    n < 0.5
+      ? 'trigonal bipyramidal'
+      : n < 1.5
+        ? 'see-saw'
+        : n < 2.5
+          ? 'T-shaped'
+          : 'linear'
+  return (
+    <div
+      style={{ bottom: `${bottom}px`, right: `${right}px` }}
+      className={cn(
+        'border-border-subtle bg-page/85 pointer-events-auto absolute z-10 flex w-[260px]',
+        'flex-col gap-1 rounded-md border px-3 py-2 backdrop-blur-sm shadow-sm',
+      )}
+    >
+      <div className="flex items-center justify-between text-[11px]">
+        <span className="text-text-secondary font-medium">Lone pairs: {value.toFixed(1)}</span>
+        <span className="text-text-tertiary italic">{shapeLabel(value)}</span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={3}
+        step={0.05}
+        value={value}
+        onChange={(e) => {
+          const raw = parseFloat(e.target.value)
+          // Soft snap-to-tick: integers within 0.12 pull to the integer
+          // so the user feels a gentle detent but can still hold at
+          // intermediate values.
+          const nearest = Math.round(raw)
+          const snapped = Math.abs(raw - nearest) < 0.12 ? nearest : raw
+          onChange(snapped)
+        }}
+        className="w-full"
+        aria-label="Lone-pair count"
+      />
+      <div className="text-text-tertiary flex justify-between text-[9px]">
+        <span>0</span>
+        <span>1</span>
+        <span>2</span>
+        <span>3</span>
+      </div>
+    </div>
+  )
+}
+
+function InspectTooltip({
+  x,
+  y,
+  payload,
+}: {
+  x: number
+  y: number
+  payload: InspectPayload
+}) {
+  // Offset from the cursor so the tooltip doesn't sit underneath the
+  // cursor itself and trigger flicker as the pointer moves into it.
+  const offsetX = 14
+  const offsetY = 14
+  return (
+    <div
+      style={{
+        left: `${x + offsetX}px`,
+        top: `${y + offsetY}px`,
+        maxWidth: '220px',
+      }}
+      className={cn(
+        'border-border-subtle bg-page/95 pointer-events-none absolute z-20 flex flex-col gap-0.5',
+        'rounded-md border px-2 py-1.5 text-[11px] shadow-sm backdrop-blur-sm',
+      )}
+    >
+      <span className="text-text-primary font-medium">{inspectTitle(payload)}</span>
+      {inspectLines(payload).map((line, i) => (
+        <span key={i} className="text-text-tertiary leading-snug">
+          {line}
+        </span>
+      ))}
     </div>
   )
 }
@@ -731,12 +1435,6 @@ export function MoleculeScene({
 // ---------------------------------------------------------------------------
 // Overlays — legend (what's in the scene) and reset-view affordance.
 // ---------------------------------------------------------------------------
-
-const ELEMENT_LABEL: Record<ElementSymbol, string> = {
-  Xe: 'Xenon',
-  F: 'Fluorine',
-  Cl: 'Chlorine',
-}
 
 function SceneLegend({
   molecule,
@@ -760,16 +1458,13 @@ function SceneLegend({
   }
 
   const showLonePairs = chipState.lonePairs && treatment !== 'wedge' && treatment !== 'geometry'
-  const showPlane = (chipState.equatorialPlane || treatment === 'geometry') && treatment !== 'lewis' && treatment !== 'wedge'
+  const showPlane =
+    (chipState.equatorialPlane || treatment === 'geometry') &&
+    treatment !== 'lewis' &&
+    treatment !== 'wedge'
 
-  // Wedge mode shows just the element labels — there are no lone pairs or
-  // plane to call out, but the atom identification is still useful.
-  // Otherwise only show the legend when there's something beyond atoms+bonds.
   if (!showLonePairs && !showPlane && treatment !== 'wedge') return null
 
-  // Sit inside the safe area — below the overlaid header (topInsetPx) with a
-  // small additional gap so the legend doesn't bump right into the header's
-  // bottom border.
   const top = topInsetPx > 0 ? topInsetPx - 4 : 8
   return (
     <div
@@ -819,8 +1514,6 @@ function ResetViewButton({
   topInsetPx: number
   rightInsetPx: number
 }) {
-  // Stay inside the safe area: below the overlaid header (topInset) and left
-  // of the floating right pane (rightInset).
   const top = topInsetPx > 0 ? topInsetPx - 4 : 8
   const right = rightInsetPx > 0 ? rightInsetPx + 4 : 8
   return (
@@ -845,23 +1538,11 @@ function ResetViewButton({
 // Scene building
 // ---------------------------------------------------------------------------
 
-const USERDATA_KIND = 'kind'
-type SceneObjectKind =
-  | 'atom'
-  | 'bond'
-  | 'lone-pair'
-  | 'equatorial-plane'
-  | 'angle-label'
-
 type OpacityLayers = {
   base: number
   transition: number
 }
 const USERDATA_OPACITY = 'opacity'
-
-function tagObject(o: THREE.Object3D, kind: SceneObjectKind) {
-  o.userData[USERDATA_KIND] = kind
-}
 
 function tagMeshOpacity(mesh: THREE.Mesh | THREE.Line | THREE.Sprite, base: number) {
   const layers: OpacityLayers = { base, transition: 1 }
@@ -893,21 +1574,255 @@ function applyTransitionScalar(group: THREE.Group, scalar: number) {
 }
 
 /**
- * Build the molecule's geometry given the current treatment.
- *
- * Each treatment picks which primitives to draw and which to hide. Bond
- * style varies by treatment too — wedge mode swaps cylinders for tapered
- * cones or dashed segments based on the bond's angle to the camera.
+ * Imperatively update the dragged LP's mesh position + glow during drag /
+ * snap-back, without going through a React rebuild.
  */
+function applyLpOverride(
+  lpMeshes: Map<string, THREE.Object3D>,
+  glowMeshes: Map<string, THREE.Mesh>,
+  key: string,
+  position: [number, number, number],
+  direction: [number, number, number],
+  strain: number,
+) {
+  const mesh = lpMeshes.get(key)
+  if (mesh) {
+    mesh.position.set(...position)
+    const dir = new THREE.Vector3(...direction).normalize()
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir)
+  }
+  const glow = glowMeshes.get(key)
+  if (glow) {
+    glow.position.set(...position)
+    const mat = glow.material as THREE.MeshBasicMaterial
+    // Strain 0 → invisible, 1 → a soft warm halo. Kept deliberately subtle:
+    // the brief asks for "not red flashing, not error states."
+    mat.opacity = 0.32 * strain
+    const scale = 1 + strain * 0.18
+    glow.scale.set(scale, scale, scale)
+  }
+}
+
+/**
+ * Deform the rest of the molecule while one LP is being dragged. Approximates
+ * VSEPR repulsion: every non-dragged electron pair (LPs and bonded atoms) gets
+ * pushed tangent-to-its-radial-seat away from every other pair, weighted by
+ * inverse-square angular distance, then renormalized back to its sphere.
+ *
+ * Lone pairs exert a slightly stronger repulsion than bonded atoms (real VSEPR
+ * behavior: LP > BP). The dragged LP is treated as a strong influence at its
+ * current direction, which is what produces the "F atoms get crowded, bond
+ * angles compress, molecule visibly resists" demo moment when the user pulls
+ * a lone pair toward an axial position.
+ *
+ * Bonds are followed by re-positioning + scaling their cylinders to span the
+ * updated atom positions.
+ */
+function applyDeformation(
+  dragKey: string,
+  dragDir: THREE.Vector3,
+  data: MoleculeData,
+  atomMeshes: Map<string, THREE.Mesh>,
+  bondMeshes: BondMeshInfo[],
+  lpMeshes: Map<string, THREE.Object3D>,
+) {
+  const LP_WEIGHT = 1.25
+  const ATOM_WEIGHT = 1.0
+  // Maximum angular deflection from canonical seat, in radians. Tangent
+  // magnitudes above this get clamped so a strained position can't fling a
+  // pair past its neighbors.
+  const MAX_DEFLECT_RAD = 0.55
+  const STRENGTH = 0.18
+
+  type Pair = {
+    key: string
+    canonicalDir: THREE.Vector3
+    currentDir: THREE.Vector3
+    radius: number
+    weight: number
+    kind: 'atom' | 'lp'
+  }
+  const pairs: Pair[] = []
+  for (const atom of data.atoms) {
+    if (atom.isCentral) continue
+    const v = new THREE.Vector3(...atom.position)
+    if (v.length() < 1e-3) continue
+    const canonical = v.clone().normalize()
+    pairs.push({
+      key: atom.key,
+      canonicalDir: canonical,
+      currentDir: canonical.clone(),
+      radius: v.length(),
+      weight: ATOM_WEIGHT,
+      kind: 'atom',
+    })
+  }
+  for (const lp of data.lonePairs) {
+    const baseDir = new THREE.Vector3(...lp.direction)
+    if (baseDir.length() < 1e-3) continue
+    const canonical = baseDir.clone().normalize()
+    // For the dragged LP, replace canonical direction with the cursor
+    // position so the others react to where the user has pulled it.
+    const isDragged = lp.key === dragKey
+    const current = isDragged ? dragDir.clone().normalize() : canonical.clone()
+    pairs.push({
+      key: lp.key,
+      canonicalDir: canonical,
+      currentDir: current,
+      radius: LONE_PAIR_RADIAL,
+      weight: LP_WEIGHT,
+      kind: 'lp',
+    })
+  }
+
+  // One-pass relaxation: for every non-dragged pair, sum the repulsion
+  // contributions from all OTHER pairs (including the dragged LP at its
+  // current direction). Each contribution is the tangent direction away from
+  // the neighbor, scaled by 1/angle² with a floor so coincident pairs don't
+  // produce infinite force. The resulting tangent vector is clamped to
+  // MAX_DEFLECT_RAD before rotating the canonical seat by that angle.
+  const tmpAxis = new THREE.Vector3()
+  for (const p of pairs) {
+    if (p.key === dragKey) continue
+    const tangent = new THREE.Vector3(0, 0, 0)
+    for (const o of pairs) {
+      if (o.key === p.key) continue
+      // Vector pointing FROM the neighbor's current position TO p's
+      // canonical seat, projected onto p's tangent plane. This is the
+      // direction p should move to get away from the neighbor.
+      const away = p.canonicalDir.clone().sub(o.currentDir)
+      const awayLenSq = away.lengthSq()
+      if (awayLenSq < 1e-8) continue
+      away.normalize()
+      // Project to p's tangent plane.
+      const radial = away.dot(p.canonicalDir)
+      const tangentDir = away.sub(p.canonicalDir.clone().multiplyScalar(radial))
+      const tangentLen = tangentDir.length()
+      if (tangentLen < 1e-6) continue
+      tangentDir.normalize()
+      // Angular distance between p's canonical seat and o's current direction.
+      // Clamped so coincident pairs don't blow up the inverse-square term.
+      const cosA = THREE.MathUtils.clamp(p.canonicalDir.dot(o.currentDir), -1, 1)
+      const angle = Math.max(Math.acos(cosA), 0.18)
+      const magnitude = (o.weight / (angle * angle)) * STRENGTH
+      tangent.add(tangentDir.multiplyScalar(magnitude))
+    }
+    // Convert the tangent vector into an axis-angle rotation around the
+    // center, then rotate the canonical seat by that amount. This keeps the
+    // result on the unit sphere without renormalization weirdness.
+    const tangentMag = Math.min(tangent.length(), MAX_DEFLECT_RAD)
+    if (tangentMag < 1e-4) {
+      if (p.kind === 'atom') {
+        const mesh = atomMeshes.get(p.key)
+        if (mesh) mesh.position.copy(p.canonicalDir).multiplyScalar(p.radius)
+      } else {
+        const mesh = lpMeshes.get(p.key)
+        if (mesh) {
+          mesh.position.copy(p.canonicalDir).multiplyScalar(p.radius)
+          mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), p.canonicalDir)
+        }
+      }
+      continue
+    }
+    tangent.normalize()
+    tmpAxis.crossVectors(p.canonicalDir, tangent).normalize()
+    const q = new THREE.Quaternion().setFromAxisAngle(tmpAxis, tangentMag)
+    const newDir = p.canonicalDir.clone().applyQuaternion(q).normalize()
+
+    if (p.kind === 'atom') {
+      const mesh = atomMeshes.get(p.key)
+      if (mesh) mesh.position.copy(newDir).multiplyScalar(p.radius)
+    } else {
+      const mesh = lpMeshes.get(p.key)
+      if (mesh) {
+        mesh.position.copy(newDir).multiplyScalar(p.radius)
+        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), newDir)
+      }
+    }
+  }
+
+  // Follow-up: update bonds to span the (possibly moved) atom positions.
+  // The bond cylinders were built with their natural length baked into the
+  // geometry; we reposition + reorient + scale-along-Y so they stay attached.
+  if (bondMeshes.length === 0) return
+  const central = new THREE.Vector3(0, 0, 0)
+  for (const bm of bondMeshes) {
+    const fromMesh = atomMeshes.get(bm.fromKey)
+    const toMesh = atomMeshes.get(bm.toKey)
+    const fromPos = fromMesh ? fromMesh.position : central
+    const toPos = toMesh ? toMesh.position : central
+    const dir = toPos.clone().sub(fromPos)
+    const newLength = dir.length()
+    if (newLength < 1e-4) continue
+    const mid = fromPos.clone().add(toPos).multiplyScalar(0.5)
+    bm.mesh.position.copy(mid)
+    bm.mesh.quaternion.setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      dir.clone().normalize(),
+    )
+    bm.mesh.scale.y = newLength / bm.origLength
+  }
+}
+
+/** Snap every atom and bond back to its canonical (non-deformed) layout.
+ *  Called when the drag ends and the snap-back finishes. */
+function clearDeformation(
+  data: MoleculeData,
+  atomMeshes: Map<string, THREE.Mesh>,
+  bondMeshes: BondMeshInfo[],
+  lpMeshes: Map<string, THREE.Object3D>,
+  excludeLpKey?: string,
+) {
+  for (const atom of data.atoms) {
+    if (atom.isCentral) continue
+    const mesh = atomMeshes.get(atom.key)
+    if (mesh) mesh.position.set(...atom.position)
+  }
+  for (const lp of data.lonePairs) {
+    if (lp.key === excludeLpKey) continue
+    const mesh = lpMeshes.get(lp.key)
+    if (mesh) {
+      mesh.position.set(...lp.position)
+      const dir = new THREE.Vector3(...lp.direction).normalize()
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir)
+    }
+  }
+  for (const bm of bondMeshes) {
+    bm.mesh.scale.y = 1
+    const fromMesh = atomMeshes.get(bm.fromKey)
+    const toMesh = atomMeshes.get(bm.toKey)
+    if (!fromMesh || !toMesh) continue
+    const dir = toMesh.position.clone().sub(fromMesh.position)
+    const newLength = dir.length()
+    if (newLength < 1e-4) continue
+    const mid = fromMesh.position.clone().add(toMesh.position).multiplyScalar(0.5)
+    bm.mesh.position.copy(mid)
+    bm.mesh.quaternion.setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      dir.clone().normalize(),
+    )
+    bm.mesh.scale.y = newLength / bm.origLength
+  }
+}
+
+type BondMeshInfo = {
+  mesh: THREE.Object3D
+  fromKey: string
+  toKey: string
+  origLength: number
+}
+
 function buildScene(
   group: THREE.Group,
   data: MoleculeData,
   chipState: ChipState,
   treatment: Treatment,
   cameraForward: THREE.Vector3,
-  /** Whether to fully build (true) or skip while the camera animation is
-   *  still in flight (false → simplified build to avoid a flash). */
   fullBuild: boolean,
+  lpMeshes: Map<string, THREE.Object3D>,
+  lpGlowMeshes: Map<string, THREE.Mesh>,
+  atomMeshes: Map<string, THREE.Mesh>,
+  bondMeshes: BondMeshInfo[],
 ) {
   const showLonePairs = chipState.lonePairs && treatment !== 'wedge' && treatment !== 'geometry'
   const showEquatorialPlane =
@@ -917,14 +1832,16 @@ function buildScene(
     treatment !== 'lewis'
   const showAngles =
     (chipState.angles || treatment === 'geometry') &&
-    !!data.bondAnglePair &&
+    !!data.bondAngleKeys &&
     data.bondAngle !== undefined &&
     treatment !== 'wedge' &&
     treatment !== 'lewis'
 
   // Atoms — always rendered. In geometry treatment, lerp colors toward
   // neutral so the abstract structure reads first.
+  const atomByKey = new Map<string, AtomDef>()
   for (const atom of data.atoms) {
+    atomByKey.set(atom.key, atom)
     const geom = new THREE.SphereGeometry(ATOM_RADIUS[atom.element], 32, 32)
     const color = new THREE.Color(ATOM_COLOR[atom.element])
     if (treatment === 'geometry') {
@@ -938,9 +1855,14 @@ function buildScene(
     })
     const mesh = new THREE.Mesh(geom, mat)
     mesh.position.set(...atom.position)
-    tagObject(mesh, 'atom')
-    tagMeshOpacity(mesh, 1)
+    mesh.userData[USERDATA_INSPECT] = {
+      kind: 'atom',
+      element: atom.element,
+      role: atom.isCentral ? 'central' : 'bonded',
+    } satisfies InspectAtom
+    tagMeshOpacity(mesh, atom.opacity ?? 1)
     group.add(mesh)
+    atomMeshes.set(atom.key, mesh)
   }
 
   if (!fullBuild) return
@@ -948,33 +1870,105 @@ function buildScene(
   // Bonds — style depends on treatment.
   if (chipState.bonds) {
     for (const bond of data.bonds) {
-      const a = data.atoms[bond.from]
-      const b = data.atoms[bond.to]
+      const a = atomByKey.get(bond.fromKey)
+      const b = atomByKey.get(bond.toKey)
+      if (!a || !b) continue
+      let obj: THREE.Object3D
       if (treatment === 'wedge') {
-        group.add(makeWedgeOrDashBond(a.position, b.position, cameraForward))
+        obj = makeWedgeOrDashBond(a.position, b.position, cameraForward)
       } else if (treatment === 'lewis') {
-        group.add(makeBond(a.position, b.position, 0x2f2c28, BOND_RADIUS * 0.7))
+        obj = makeBond(a.position, b.position, 0x2f2c28, BOND_RADIUS * 0.7)
       } else {
-        group.add(makeBond(a.position, b.position, BOND_COLOR, BOND_RADIUS))
+        obj = makeBond(a.position, b.position, BOND_COLOR, BOND_RADIUS)
+      }
+      const length = new THREE.Vector3(...a.position).distanceTo(
+        new THREE.Vector3(...b.position),
+      )
+      const inspect: InspectBond = {
+        kind: 'bond',
+        from: a.element,
+        to: b.element,
+        // Bond length is roughly 1.2 scene units; XeF2 bond length is ~2.00 Å
+        // experimentally. We scale 1 scene unit ≈ 1.67 Å for the readout.
+        lengthAngstroms: length * 1.67,
+      }
+      attachInspectRecursive(obj, inspect)
+      // Apply per-bond opacity (used for the fractional LP-count seat
+      // transitioning between bonded atom and lone pair).
+      const baseOpacity = bond.opacity ?? 1
+      if (baseOpacity < 1) {
+        obj.traverse((c) => {
+          if ((c as THREE.Mesh).isMesh) {
+            tagMeshOpacity(c as THREE.Mesh, baseOpacity)
+          }
+        })
+      }
+      group.add(obj)
+      // Track only the default-treatment cylinder bonds for deformation;
+      // wedge/dash bonds aren't dragged-against.
+      if (treatment === 'default') {
+        bondMeshes.push({ mesh: obj, fromKey: bond.fromKey, toKey: bond.toKey, origLength: length })
       }
     }
   }
 
   if (showLonePairs) {
     for (const lp of data.lonePairs) {
-      group.add(makeLonePair(lp.position, lp.direction))
+      const lpGroup = new THREE.Group()
+      const cloud = makeLonePair(lp.position, lp.direction, lp.opacity ?? LONE_PAIR_OPACITY)
+      cloud.userData[USERDATA_INSPECT] = {
+        kind: 'lone-pair',
+        central: data.centralElement,
+      } satisfies InspectLonePair
+      cloud.userData[USERDATA_LP_KEY] = lp.key
+      lpGroup.add(cloud)
+      // Strain glow — a slightly larger translucent sphere co-located
+      // with the LP cloud. Starts invisible; the drag handler raises its
+      // opacity in proportion to strain.
+      const glowGeom = new THREE.SphereGeometry(0.34, 24, 24)
+      const glowMat = new THREE.MeshBasicMaterial({
+        color: LONE_PAIR_STRAIN_COLOR,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      })
+      const glow = new THREE.Mesh(glowGeom, glowMat)
+      glow.position.set(...lp.position)
+      glow.userData[USERDATA_LP_STRAIN_GLOW] = true
+      lpGroup.add(glow)
+      group.add(lpGroup)
+      lpMeshes.set(lp.key, cloud)
+      lpGlowMeshes.set(lp.key, glow)
     }
   }
 
   if (showEquatorialPlane) {
-    group.add(
-      makeEquatorialPlane(treatment === 'geometry' ? 0.32 : EQUATORIAL_PLANE_OPACITY),
+    const plane = makeEquatorialPlane(
+      treatment === 'geometry' ? 0.32 : EQUATORIAL_PLANE_OPACITY,
     )
+    plane.userData[USERDATA_INSPECT] = { kind: 'equatorial-plane' } satisfies InspectPlane
+    group.add(plane)
   }
 
   if (showAngles) {
-    group.add(makeAngleAnnotation(data, treatment === 'geometry'))
+    const annot = makeAngleAnnotation(data, treatment === 'geometry')
+    if (annot) {
+      const inspect: InspectAngle = {
+        kind: 'angle',
+        degrees: data.bondAngle!,
+        description: 'Axial–axial: two F atoms 180° apart',
+      }
+      attachInspectRecursive(annot, inspect)
+      group.add(annot)
+    }
   }
+}
+
+function attachInspectRecursive(obj: THREE.Object3D, payload: InspectPayload) {
+  obj.userData[USERDATA_INSPECT] = payload
+  obj.traverse((c) => {
+    c.userData[USERDATA_INSPECT] = payload
+  })
 }
 
 function makeBond(
@@ -1000,20 +1994,10 @@ function makeBond(
     new THREE.Vector3(0, 1, 0),
     direction.clone().normalize(),
   )
-  tagObject(mesh, 'bond')
   tagMeshOpacity(mesh, 1)
   return mesh
 }
 
-/**
- * Pick wedge / dash / in-plane bond rendering based on the bond's projected
- * angle to the camera forward direction.
- *
- *   |dot| < 0.15  →  in-plane, render as a thin flat cylinder
- *   dot >= 0.15   →  outer atom toward viewer, render as a wedge (cone
- *                    with point at central atom)
- *   dot <= -0.15  →  outer atom behind, render as a dashed cylinder
- */
 function makeWedgeOrDashBond(
   a: [number, number, number],
   b: [number, number, number],
@@ -1024,9 +2008,6 @@ function makeWedgeOrDashBond(
   const direction = new THREE.Vector3().subVectors(end, start)
   const length = direction.length()
   const unit = direction.clone().normalize()
-  // Camera forward points INTO the scene. Bond going TOWARD viewer means
-  // the outer atom is closer to camera than the inner atom, i.e. the bond
-  // direction is mostly opposite the camera forward → dot < 0.
   const dot = unit.dot(cameraForward)
 
   if (dot < -0.15) {
@@ -1035,7 +2016,6 @@ function makeWedgeOrDashBond(
   if (dot > 0.15) {
     return makeDashedBond(start, end, length, BOND_AWAY_COLOR)
   }
-  // In-plane — flat cylinder.
   return makeBond(a, b, BOND_COLOR, BOND_RADIUS)
 }
 
@@ -1045,9 +2025,6 @@ function makeWedge(
   length: number,
   color: number,
 ): THREE.Mesh {
-  // Cone with point at the central atom (start) and wide at the outer atom
-  // (end). Cone geometry has its apex at +y by default; we orient so apex
-  // points toward `start`.
   const geom = new THREE.ConeGeometry(BOND_RADIUS * 2.4, length, 24, 1, false)
   const mat = new THREE.MeshStandardMaterial({
     color,
@@ -1055,13 +2032,10 @@ function makeWedge(
     metalness: 0.0,
   })
   const mesh = new THREE.Mesh(geom, mat)
-  // Cone default: apex at +y, base at -y. To put apex at start and base at
-  // end, place center at midpoint and orient -y toward `direction`.
   const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5)
   mesh.position.copy(mid)
   const direction = new THREE.Vector3().subVectors(start, end).normalize()
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction)
-  tagObject(mesh, 'bond')
   tagMeshOpacity(mesh, 1)
   return mesh
 }
@@ -1072,7 +2046,6 @@ function makeDashedBond(
   length: number,
   color: number,
 ): THREE.Group {
-  // Render as N short cylinders along the bond direction with gaps between.
   const grp = new THREE.Group()
   const segments = 6
   const segLen = length / (segments * 2 - 1)
@@ -1089,23 +2062,22 @@ function makeDashedBond(
     const m = new THREE.Mesh(geom, mat)
     m.position.copy(pos)
     m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction)
-    tagObject(m, 'bond')
     tagMeshOpacity(m, 1)
     grp.add(m)
   }
-  tagObject(grp, 'bond')
   return grp
 }
 
 function makeLonePair(
   position: [number, number, number],
   direction: [number, number, number],
+  baseOpacity: number,
 ): THREE.Mesh {
   const geom = new THREE.SphereGeometry(0.27, 24, 24)
   const mat = new THREE.MeshStandardMaterial({
     color: LONE_PAIR_COLOR,
     transparent: true,
-    opacity: LONE_PAIR_OPACITY,
+    opacity: baseOpacity,
     roughness: 0.4,
     metalness: 0.0,
     depthWrite: false,
@@ -1115,8 +2087,7 @@ function makeLonePair(
   const dir = new THREE.Vector3(...direction).normalize()
   mesh.scale.set(0.7, 1.4, 0.7)
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir)
-  tagObject(mesh, 'lone-pair')
-  tagMeshOpacity(mesh, LONE_PAIR_OPACITY)
+  tagMeshOpacity(mesh, baseOpacity)
   return mesh
 }
 
@@ -1152,15 +2123,19 @@ function makeEquatorialPlane(opacity: number): THREE.Group {
   tagMeshOpacity(ring, EQUATORIAL_PLANE_RING_OPACITY)
   grp.add(ring)
 
-  tagObject(grp, 'equatorial-plane')
   return grp
 }
 
-function makeAngleAnnotation(data: MoleculeData, prominent: boolean): THREE.Group {
+function makeAngleAnnotation(data: MoleculeData, prominent: boolean): THREE.Group | null {
+  if (!data.bondAngleKeys || data.bondAngle === undefined) return null
+  const atomByKey = new Map<string, AtomDef>()
+  for (const a of data.atoms) atomByKey.set(a.key, a)
+  const aDef = atomByKey.get(data.bondAngleKeys[0])
+  const bDef = atomByKey.get(data.bondAngleKeys[1])
+  if (!aDef || !bDef) return null
   const grp = new THREE.Group()
-  const [iA, iB] = data.bondAnglePair!
-  const a = new THREE.Vector3(...data.atoms[iA].position)
-  const b = new THREE.Vector3(...data.atoms[iB].position)
+  const a = new THREE.Vector3(...aDef.position)
+  const b = new THREE.Vector3(...bDef.position)
 
   if (data.bondAngle === 180) {
     const lineGeom = new THREE.BufferGeometry().setFromPoints([a, b])
@@ -1180,7 +2155,6 @@ function makeAngleAnnotation(data: MoleculeData, prominent: boolean): THREE.Grou
   sprite.position.copy(labelPos)
   tagMeshOpacity(sprite, 1)
   grp.add(sprite)
-  tagObject(grp, 'angle-label')
   return grp
 }
 

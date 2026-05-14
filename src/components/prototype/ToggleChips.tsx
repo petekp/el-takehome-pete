@@ -55,6 +55,7 @@ function ControlToggle({
   // if the cue would still match.
   const [tapped, setTapped] = useState(false)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!cued) setTapped(false)
   }, [cued])
 

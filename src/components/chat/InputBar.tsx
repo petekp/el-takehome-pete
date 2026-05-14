@@ -66,6 +66,7 @@ export function InputBar({
   useEffect(() => {
     if (seededRef.current) return
     if (!initialAttachments || initialAttachments.length === 0) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAttachments(initialAttachments)
     seededRef.current = true
   }, [initialAttachments])
