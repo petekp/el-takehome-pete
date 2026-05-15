@@ -9,6 +9,7 @@ import {
 } from '@/lib/concepts'
 import { defaultRetryable, withBackoff } from '@/lib/retry'
 import {
+  AFFORDANCE_PLACEHOLDER,
   ARTIFACT_PLACEHOLDER,
   postArtifactSystemPrompt,
   sanitizeAssistantTextForModel,
@@ -22,6 +23,10 @@ const apiKey = process.env.ANTHROPIC_API_KEY
 
 const CLASSIFIER_MODEL = 'claude-haiku-4-5'
 const AFFORDANCE_MODEL = 'claude-sonnet-4-6'
+const STREAM_HEADERS = {
+  'Content-Type': ENVELOPE_CONTENT_TYPE,
+  'Cache-Control': 'no-cache',
+}
 
 type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
 
@@ -104,6 +109,14 @@ function flattenUserText(content: IncomingMessage['content']): string {
     .join('\n')
 }
 
+function locallyClassify(content: IncomingMessage['content'] | null): ClassifierResult {
+  if (!content) return { conceptId: null, reasoning: '' }
+  const heuristic = clientMatchTrigger(flattenUserText(content))
+  return heuristic
+    ? { conceptId: heuristic, reasoning: 'keyword heuristic matched on user text' }
+    : { conceptId: null, reasoning: 'keyword heuristic did not match user text' }
+}
+
 async function classify(
   client: Anthropic,
   latestContent: IncomingMessage['content'],
@@ -111,14 +124,8 @@ async function classify(
   // Short-circuit on the keyword heuristic: when the user's text clearly
   // matches a concept (e.g. "XeF2" + lone-pair language), skip the
   // model round-trip. Cheaper and bulletproof for the demo trigger.
-  const flat = flattenUserText(latestContent)
-  const heuristic = clientMatchTrigger(flat)
-  if (heuristic) {
-    return {
-      conceptId: heuristic,
-      reasoning: 'keyword heuristic matched on user text',
-    }
-  }
+  const local = locallyClassify(latestContent)
+  if (local.conceptId) return local
 
   const res = await withBackoff(() =>
     client.messages.create({
@@ -156,24 +163,50 @@ function affordanceSystemPrompt(concept: Concept): string {
     "Concretely: open by naming what you can see — the row on the chart she's stuck on and her Lewis drawing — and validate that the wedge-and-dash is genuinely confusing for this cell. Then one sentence saying her blocking intuition is half-right and the half that's off is the spatial part. Then offer the choice in plain language — something like \"want to look at it together first, or should I just answer it?\" The offer is light, easy to decline. Do not write the button labels yourself; just emit the tag.",
     '',
     'End your message with EXACTLY this on its own line, with nothing after it:',
-    '<affordance/>',
+    AFFORDANCE_PLACEHOLDER,
     '',
     'Tone: warm, peer-level, plainspoken. No lecturing. No "of course!" or "great question!" — just speak.',
   ].join('\n')
 }
 
-export async function POST(req: Request) {
-  if (!apiKey) {
-    return new Response('ANTHROPIC_API_KEY not configured', { status: 501 })
-  }
+function fallbackAffordanceText(concept: Concept): string {
+  return [
+    "I'm having trouble reaching the Anthropic API right now, so I'm using the built-in demo script for this part.",
+    '',
+    concept.descriptors.fallback.affordance.intro,
+    '',
+    AFFORDANCE_PLACEHOLDER,
+  ].join('\n')
+}
 
+function fallbackArcResponse(
+  concept: Concept,
+  reasoning: string,
+): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const envelope = new EnvelopeEncoder(controller)
+      envelope.meta({
+        isArc: true,
+        conceptId: concept.id,
+        reasoning,
+        descriptors: { title: concept.descriptors.title },
+      })
+      envelope.text(fallbackAffordanceText(concept))
+      envelope.done()
+    },
+  })
+
+  return new Response(stream, { headers: STREAM_HEADERS })
+}
+
+export async function POST(req: Request) {
   const body = (await req.json()) as {
     model: string
     messages: IncomingMessage[]
     artifactInteraction?: ArtifactInteractionSummary | null
   }
   const { model, messages, artifactInteraction } = body
-  const client = new Anthropic({ apiKey })
   const latestContent = latestUserBlocks(messages) ?? ''
 
   // If an artifact has already been opened in this chat, suppress the
@@ -187,6 +220,20 @@ export async function POST(req: Request) {
       typeof m.content === 'string' &&
       m.content.trim() === ARTIFACT_PLACEHOLDER,
   )
+
+  if (!apiKey) {
+    const local = !arcAlreadyResolved ? locallyClassify(latestContent) : null
+    if (local?.conceptId) {
+      return fallbackArcResponse(
+        getConcept(local.conceptId),
+        `${local.reasoning}; Anthropic API key unavailable`,
+      )
+    }
+
+    return new Response('ANTHROPIC_API_KEY not configured', { status: 501 })
+  }
+
+  const client = new Anthropic({ apiKey })
 
   // 1. Classify. Failures fall through to non-arc chat — never block the chat
   //    response on a flaky classifier. Skipped when an arc is already
@@ -231,6 +278,7 @@ export async function POST(req: Request) {
       // tokens have hit the wire. Once we've started streaming text the
       // envelope is past the point of no return; retrying would double-write.
       let textEmitted = false
+      let accumulatedText = ''
       const streamArgs =
         isArc && concept
           ? {
@@ -261,6 +309,7 @@ export async function POST(req: Request) {
             const messageStream = client.messages.stream(streamArgs)
             messageStream.on('text', (delta) => {
               textEmitted = true
+              accumulatedText += delta
               envelope.text(delta)
             })
             await messageStream.finalMessage()
@@ -269,7 +318,15 @@ export async function POST(req: Request) {
         )
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown upstream error'
-        envelope.error(message, true)
+        if (isArc && concept) {
+          console.error('Affordance stream failed; falling back to canned arc response', err)
+          if (!accumulatedText.includes(AFFORDANCE_PLACEHOLDER)) {
+            const prefix = textEmitted ? '\n\n' : ''
+            envelope.text(`${prefix}${fallbackAffordanceText(concept)}`)
+          }
+        } else {
+          envelope.error(message, true)
+        }
       } finally {
         envelope.done()
       }
@@ -277,9 +334,6 @@ export async function POST(req: Request) {
   })
 
   return new Response(stream, {
-    headers: {
-      'Content-Type': ENVELOPE_CONTENT_TYPE,
-      'Cache-Control': 'no-cache',
-    },
+    headers: STREAM_HEADERS,
   })
 }
