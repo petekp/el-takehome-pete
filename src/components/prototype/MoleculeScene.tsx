@@ -1426,13 +1426,7 @@ export function LonePairSlider({
   className?: string
 }) {
   return (
-    <div
-      className={cn(
-        'pointer-events-auto flex items-center gap-2 text-[11px]',
-        className,
-      )}
-    >
-      <span className="text-text-tertiary whitespace-nowrap">Lone pairs</span>
+    <div className={cn('pointer-events-auto inline-flex h-7 items-center', className)}>
       <input
         type="range"
         min={0}
@@ -1447,17 +1441,9 @@ export function LonePairSlider({
           const snapped = Math.abs(raw - nearest) < 0.12 ? nearest : raw
           onChange(snapped)
         }}
-        className="h-1 w-[96px] cursor-pointer"
+        className="h-1 w-[140px] cursor-pointer"
         aria-label="Lone-pair count"
       />
-      <span className="text-text-secondary tabular-nums font-medium whitespace-nowrap">
-        {value.toFixed(1)}
-      </span>
-      {/* Min-width reserves room for the longest shape ("trigonal
-          bipyramidal") so the label can change without shifting the slider. */}
-      <span className="text-text-tertiary inline-block min-w-[120px] italic whitespace-nowrap">
-        {lpShapeLabel(value)}
-      </span>
     </div>
   )
 }
@@ -1964,9 +1950,12 @@ function buildScene(
         })
       }
       group.add(obj)
-      // Track only the default-treatment cylinder bonds for deformation;
-      // wedge/dash bonds aren't dragged-against.
-      if (treatment === 'default') {
+      // Track every cylinder bond for deformation. Wedge/dash bonds use a
+      // perspective-dependent geometry that wouldn't reposition correctly
+      // via the cylinder reposition+scale path, so they're excluded.
+      // Without tracking lewis-mode bonds here, LP drag in Lewis would push
+      // atoms away from bond endpoints and the bonds would visibly detach.
+      if (treatment !== 'wedge') {
         bondMeshes.push({ mesh: obj, fromKey: bond.fromKey, toKey: bond.toKey, origLength: length })
       }
     }

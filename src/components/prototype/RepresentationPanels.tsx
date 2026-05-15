@@ -1,12 +1,10 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { X } from 'lucide-react'
+import { Check, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { activeCue, usePrototypeStore, type RepresentationPanelId } from '@/lib/prototype-store'
 import type { ElementCue, Molecule } from '@/lib/artifact-script'
 import type { ImageAttachment } from '@/lib/types'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/ToggleGroup'
 
 /**
  * The row of compact representation cards above the 3D viewport edge.
@@ -70,92 +68,51 @@ function cueMatchesPanel(cue: ElementCue | null, panel: LiteracyPanelId): boolea
   return false
 }
 
-const FADE_PX = 28
-
 export function RepresentationPanels() {
   const { state, clickPanel } = usePrototypeStore()
   const artifact = state.arc.artifact
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [leftFade, setLeftFade] = useState(false)
-  const [rightFade, setRightFade] = useState(false)
-
-  const updateFades = useCallback(() => {
-    const el = containerRef.current
-    if (!el) return
-    setLeftFade(el.scrollLeft > 2)
-    setRightFade(el.scrollLeft + el.clientWidth < el.scrollWidth - 2)
-  }, [])
-
-  useEffect(() => {
-    updateFades()
-    const el = containerRef.current
-    if (!el) return
-    el.addEventListener('scroll', updateFades, { passive: true })
-    window.addEventListener('resize', updateFades)
-    const ro = new ResizeObserver(updateFades)
-    ro.observe(el)
-    return () => {
-      el.removeEventListener('scroll', updateFades)
-      window.removeEventListener('resize', updateFades)
-      ro.disconnect()
-    }
-  }, [updateFades])
 
   if (!artifact) return null
   const cue = activeCue(artifact)
 
-  // Single linear-gradient mask covers both sides. When a side isn't
-  // cropped we anchor that side at fully opaque so cards don't get clipped.
-  const stops: string[] = []
-  stops.push(leftFade ? 'transparent 0' : 'black 0')
-  if (leftFade) stops.push(`black ${FADE_PX}px`)
-  if (rightFade) stops.push(`black calc(100% - ${FADE_PX}px)`)
-  stops.push(rightFade ? 'transparent 100%' : 'black 100%')
-  const maskImage = `linear-gradient(to right, ${stops.join(', ')})`
-
   return (
-    <div
-      ref={containerRef}
-      // py-2 reserves room for the toggle group's box-shadows (and the cue
-      // pulse outline shadow) inside the scrollable element — overflow-x:auto
-      // clips both axes, so without vertical padding the shadows get sliced.
-      className="no-scrollbar flex overflow-x-auto py-2"
-      style={{ maskImage, WebkitMaskImage: maskImage }}
-    >
-      <ToggleGroup
-        type="single"
-        value={artifact.activePanel ?? null}
-        onValueChange={(v) => clickPanel(v as LiteracyPanelId)}
-      >
-        {PANELS.map((p) => {
-          const active = artifact.activePanel === p.id
-          const cued = cueMatchesPanel(cue, p.id)
-          // Once the user has clicked a cued item, suppress its pulse even
-          // if the cue is still broadcasting (e.g. panels-row still wants to
-          // highlight the others).
-          const explored = artifact.panelsExplored.includes(p.id)
-          const showCue = cued && !explored && !active
-          return (
-            <ToggleGroupItem
-              key={p.id}
-              value={p.id}
-              aria-label={p.label}
-              className={cn(
-                'relative overflow-visible',
-                showCue && 'shadow-[0_0_0_3px_rgba(0,139,255,0.18)] z-10',
-              )}
-            >
-              {p.label}
-              {showCue && (
-                <span
-                  aria-hidden
-                  className="border-accent/40 bg-accent/8 pointer-events-none absolute -inset-0.5 -z-10 animate-[cuePulse_1600ms_ease-in-out_infinite] rounded-full border"
-                />
-              )}
-            </ToggleGroupItem>
-          )
-        })}
-      </ToggleGroup>
+    <div role="menu" className="flex w-44 flex-col">
+      {PANELS.map((p) => {
+        const active = artifact.activePanel === p.id
+        const cued = cueMatchesPanel(cue, p.id)
+        // Once the user has clicked a cued item, suppress its pulse even if
+        // the cue is still broadcasting (e.g. panels-row still wants to
+        // highlight the others).
+        const explored = artifact.panelsExplored.includes(p.id)
+        const showCue = cued && !explored && !active
+        return (
+          <button
+            key={p.id}
+            type="button"
+            role="menuitemradio"
+            aria-checked={active}
+            onClick={() => clickPanel(p.id)}
+            aria-label={p.label}
+            className={cn(
+              'relative flex items-center justify-between gap-3 rounded-md px-2.5 py-1.5',
+              'text-left text-[12px] font-medium whitespace-nowrap transition-colors',
+              active
+                ? 'text-accent-strong bg-accent/10'
+                : 'text-text-secondary hover:bg-state-hover',
+              showCue && 'z-10 shadow-[0_0_0_2px_rgba(0,139,255,0.2)]',
+            )}
+          >
+            <span>{p.label}</span>
+            {active && <Check aria-hidden className="text-accent-strong size-3.5" />}
+            {showCue && (
+              <span
+                aria-hidden
+                className="border-accent/40 bg-accent/8 pointer-events-none absolute -inset-0.5 -z-10 animate-[cuePulse_1600ms_ease-in-out_infinite] rounded-md border"
+              />
+            )}
+          </button>
+        )
+      })}
     </div>
   )
 }

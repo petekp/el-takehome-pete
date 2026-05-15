@@ -34,7 +34,13 @@ import {
   type Prediction1Key,
   type Prediction2Key,
 } from '@/lib/artifact-script'
-import { LonePairSlider, MoleculeScene, moleculeNaturalLpCount } from './MoleculeScene'
+import { ControlChip, ControlPane } from './ControlPane'
+import {
+  LonePairSlider,
+  MoleculeScene,
+  lpShapeLabel,
+  moleculeNaturalLpCount,
+} from './MoleculeScene'
 import { MaterialsLightbox, PanelDiagram, RepresentationPanels } from './RepresentationPanels'
 import type { ImageAttachment } from '@/lib/types'
 
@@ -99,6 +105,14 @@ function positionInArc(stage: ArtifactStage, bubbleIndex: number): number {
 }
 
 type LiteracyPanel = 'lewis' | 'wedge' | 'geometry'
+
+function panelDisplayLabel(panel: ArtifactState['activePanel']): string {
+  if (panel === 'lewis') return 'Lewis'
+  if (panel === 'wedge') return 'Wedge-and-dash'
+  if (panel === 'geometry') return 'Geometry'
+  if (panel === 'materials') return 'Materials'
+  return 'None'
+}
 
 export function Artifact() {
   const {
@@ -209,29 +223,40 @@ export function Artifact() {
           cuePulse={activeCue(artifact) === 'panel-materials'}
           onOpenMaterials={() => setMaterialsOpen(true)}
           onReferences={() => setReferencesOpen(true)}
-          onClose={interactive ? closeArtifact : undefined}
         />
 
         <ViewportCue artifact={artifact} />
 
-        {/* Representation toggle group + lone-pair slider sit in the same
-            horizontal row along the bottom, stopping short of the floating
-            right pane so they don't slip behind it. The slider is hidden for
-            the axial-strain preset (non-equilibrium configuration the
+        {/* Bottom-of-viewport control pane. Each chip surfaces a label +
+            current value and reveals the actual control on hover. The
+            container is positioned to stop short of the floating right pane
+            so popovers don't slip behind it. The lone-pair chip is hidden
+            for the axial-strain preset (non-equilibrium configuration the
             parameterized builder can't reproduce). */}
-        <div className="pointer-events-auto absolute bottom-3 left-3 right-[340px] z-10 flex items-center gap-4">
-          <RepresentationPanels />
+        <ControlPane className="absolute bottom-3 left-3 z-10">
+          <ControlChip
+            label="View"
+            value={panelDisplayLabel(artifact.activePanel)}
+            popoverClassName="rounded-lg p-1"
+          >
+            <RepresentationPanels />
+          </ControlChip>
           {artifact.activeMolecule !== 'xef2-axial-strain' && (
-            <LonePairSlider value={lpCount} onChange={setLpCount} />
+            <ControlChip
+              label="Lone pairs"
+              value={`${lpCount.toFixed(1)} · ${lpShapeLabel(lpCount)}`}
+            >
+              <LonePairSlider value={lpCount} onChange={setLpCount} />
+            </ControlChip>
           )}
-        </div>
+        </ControlPane>
 
-        {/* Right pane as a floating card on top of the visualization. */}
+        {/* Right pane as a translucent panel on top of the visualization. */}
         <aside
           className={cn(
             'absolute bottom-3 right-3 top-[60px] z-10 flex w-[324px] flex-col',
-            'bg-surface/85 border-border-subtle overflow-hidden rounded-md border',
-            'shadow-md backdrop-blur-md',
+            'bg-page/97 border-border-subtle overflow-hidden rounded-md border',
+            'backdrop-blur-md',
           )}
         >
           <RightPane
@@ -316,14 +341,12 @@ function Header({
   cuePulse,
   onOpenMaterials,
   onReferences,
-  onClose,
 }: {
   title: string
   attachments: ImageAttachment[]
   cuePulse: boolean
   onOpenMaterials: () => void
   onReferences: () => void
-  onClose?: () => void
 }) {
   return (
     <header
@@ -340,7 +363,6 @@ function Header({
           cuePulse={cuePulse}
           onClick={onOpenMaterials}
         />
-        <span aria-hidden className="bg-border-subtle h-5 w-px" />
         <div className="flex items-center gap-1">
           <HeaderLabeledButton label="Resources" onClick={onReferences}>
             <BookOpen className="size-3.5" />
@@ -351,11 +373,6 @@ function Header({
           <HeaderIconButton label="Fullscreen" onClick={() => {}}>
             <Expand className="size-3.5" />
           </HeaderIconButton>
-          {onClose && (
-            <HeaderIconButton label="Close" onClick={onClose}>
-              <X className="size-3.5" />
-            </HeaderIconButton>
-          )}
         </div>
       </div>
     </header>
@@ -379,35 +396,56 @@ function MaterialsHeaderStack({
 }) {
   if (attachments.length === 0) return null
   const visible = attachments.slice(0, 3)
+  // Per-card geometry — base layout fans the stack (leftmost tilts left,
+  // rightmost tilts right). On hover, the outer cards spread further from
+  // center and rotate a touch more, like a hand of cards being splayed.
+  const center = (visible.length - 1) / 2
+  // Cards are size-9 inside a h-7 button so they overhang the button bounds
+  // top + bottom, giving the stack a "papers spilling out" feel.
+  const CARD_PX = 36
+  const REST_OFFSET = 9
+  const REST_ROT = 7
+  const SPREAD = 9
+  const HOVER_ROT = 16
+  const stackTransition = { type: 'spring' as const, stiffness: 320, damping: 20, mass: 0.5 }
   return (
-    <button
+    <motion.button
       type="button"
       onClick={onClick}
       aria-label="Open your materials"
+      initial="rest"
+      whileHover="hover"
+      animate="rest"
       className={cn(
-        'group relative -my-1 inline-flex items-center gap-2 rounded-md px-1.5 py-1',
+        'group relative inline-flex h-7 items-center gap-1.5 rounded-md px-2',
         'hover:bg-state-hover transition-colors',
       )}
     >
       <span
-        className="relative inline-flex h-7 shrink-0"
-        style={{ width: `${28 + (visible.length - 1) * 8}px` }}
+        // -my-1 lets the size-9 cards overhang the h-7 button vertically.
+        // Width is fixed at the rest size so the deck-spread on hover
+        // animates the cards in place — the rightmost overhangs visually
+        // without pushing the "Attachments" label right.
+        className="relative -my-1 inline-flex h-9 shrink-0"
+        style={{ width: CARD_PX + (visible.length - 1) * REST_OFFSET }}
       >
         {visible.map((a, idx) => {
-          // Fan the stack: leftmost tilts slightly left, rightmost slightly
-          // right. Each subsequent paper sits to the right of the prior so
-          // both edges are visible.
-          const center = (visible.length - 1) / 2
-          const rotation = (idx - center) * 7
-          const offset = idx * 8
+          const distance = idx - center
+          const restX = idx * REST_OFFSET
+          const hoverX = restX + distance * SPREAD
           return (
-            <img
+            <motion.img
               key={a.id}
               src={`data:${a.mediaType};base64,${a.data}`}
               alt=""
               aria-hidden
-              className="border-border-soft bg-surface absolute inset-y-0 size-7 rounded-sm border object-cover shadow-sm"
-              style={{ left: `${offset}px`, transform: `rotate(${rotation}deg)`, zIndex: idx }}
+              className="border-border-soft bg-surface absolute inset-y-0 size-9 rounded-sm border object-cover shadow-sm"
+              style={{ zIndex: idx }}
+              variants={{
+                rest: { x: restX, rotate: distance * REST_ROT },
+                hover: { x: hoverX, rotate: distance * HOVER_ROT },
+              }}
+              transition={stackTransition}
             />
           )
         })}
@@ -421,7 +459,7 @@ function MaterialsHeaderStack({
           className="border-accent/40 bg-accent/8 pointer-events-none absolute -inset-0.5 -z-10 animate-[cuePulse_1600ms_ease-in-out_infinite] rounded-md border"
         />
       )}
-    </button>
+    </motion.button>
   )
 }
 
@@ -590,7 +628,7 @@ function RightPane({
           out behind the gate/stepper instead of hitting a hard divider. */}
       <div
         aria-hidden
-        className="from-surface pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-50% to-transparent"
+        className="from-page pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-50% to-transparent"
       />
       <div className="absolute inset-x-0 bottom-0">
         {gate && !gate.satisfied && (
