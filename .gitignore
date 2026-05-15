@@ -42,10 +42,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# transcript bundle (private — emailed, not committed; repo is public)
-/transcripts-bundle/
+# transcript bundle is committed; the zip mirror and raw export JSON are not
 /transcripts-bundle.zip
 /docs/claude-conversations.json
 
-# walkthrough video — emailed, not committed (too large for git)
+# walkthrough video is attached to a GitHub Release (too large for git push)
 *.mp4
+.env*.local
