@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion, type Variants } from 'motion/react'
 import {
   BookOpen,
-  Check,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
@@ -15,7 +14,6 @@ import {
   Share2,
   X,
 } from 'lucide-react'
-import type { RefObject } from 'react'
 import { cn } from '@/lib/utils'
 import {
   activeCue,
@@ -47,27 +45,6 @@ import {
 import { MaterialsLightbox, PanelDiagram, RepresentationPanels } from './RepresentationPanels'
 import type { ImageAttachment } from '@/lib/types'
 
-/**
- * The inline artifact — the single core surface the prototype is built
- * around.
- *
- * The right pane is a state machine. At any moment it shows exactly one of:
- *   - Bubble state  (an active bubble, centered with breathing room)
- *   - Predict state (the prediction question + options + free-text)
- *   - Reveal state  (the first bubble of the reveal sequence, plus a
- *                    "You said" attribution chip)
- *   - Closing state (the closing bubble + resources + Done)
- *
- * Below it sits a persistent stepper: Back / position / Next. Next disables
- * on the final beat — Done is the exit action there.
- *
- * The header carries only the title and a small button cluster (Attachments,
- * Resources, Share, Fullscreen).
- */
-
-// Stepper math (TOTAL_STEPS, stepPosition) lives in artifact-script so the
-// summary Claude sees and the UI stepper stay in lockstep.
-
 // Right-pane carousel transition. `direction` is read off AnimatePresence's
 // custom prop so the outgoing step slides toward the side the new step came
 // from, while the incoming step slides in from the opposite side. The exit
@@ -94,8 +71,6 @@ const stepSlideVariants: Variants = {
 
 
 type LiteracyPanel = 'lewis' | 'geometry'
-type ShareStatus = 'idle' | 'copied' | 'failed' | 'unavailable'
-type FullscreenStatus = 'idle' | 'failed' | 'unavailable'
 
 function panelDisplayLabel(panel: ArtifactState['activePanel']): string {
   if (panel === 'lewis') return 'Lewis'
@@ -110,28 +85,6 @@ function isLiteracyPanel(panel: ArtifactState['activePanel']): panel is Literacy
 
 function defaultRowLpCountForStage(stage: ArtifactStage): number | null {
   return stage === 'reveal-2' ? 2 : null
-}
-
-async function copyTextToClipboard(text: string): Promise<boolean> {
-  if (window.navigator.clipboard) {
-    await window.navigator.clipboard.writeText(text)
-    return true
-  }
-
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  textarea.setAttribute('readonly', '')
-  textarea.style.position = 'fixed'
-  textarea.style.opacity = '0'
-  document.body.appendChild(textarea)
-  textarea.focus()
-  textarea.select()
-  textarea.setSelectionRange(0, text.length)
-  try {
-    return document.execCommand('copy')
-  } finally {
-    document.body.removeChild(textarea)
-  }
 }
 
 export function Artifact() {
@@ -158,7 +111,6 @@ export function Artifact() {
   const [introStatementReady, setIntroStatementReady] = useState(false)
   const [introStatementStreamed, setIntroStatementStreamed] = useState(false)
   const [stepDirection, setStepDirection] = useState<StepDirection>('forward')
-  const artifactRef = useRef<HTMLElement | null>(null)
 
   const handleMoleculeEntranceStart = useCallback(() => {
     setIntroStatementReady(true)
@@ -168,10 +120,7 @@ export function Artifact() {
     setIntroStatementStreamed(true)
   }, [])
 
-  // Row-example mode (5-domain row chip). null = inactive: scene renders the
-  // scripted molecule at its natural LP count. Integer 0..3 = active: scene
-  // renders the matching real example (0→PF5, 1→SF4, 2→ClF3, 3→XeF2).
-  // The chip itself is hidden outside reveal-2 / closing.
+  // Stage-scoped so the 5-domain row selection does not leak backward.
   const [rowSelection, setRowSelection] = useState<{
     stage: ArtifactStage
     value: number | null
@@ -183,9 +132,7 @@ export function Artifact() {
         ? defaultRowLpCountForStage(artifact.stage)
         : null
 
-  // Reset expansion whenever the active panel changes underneath (panel
-  // deactivated, switched to another literacy panel, etc.) so we never end
-  // up with an expanded overlay for a panel that isn't even active.
+  // Expansion is tied to the active panel and step so stale overlays disappear.
   const rawActivePanel = artifact?.activePanel ?? null
   const activeLiteracyPanel: LiteracyPanel | null = isLiteracyPanel(rawActivePanel)
     ? rawActivePanel
@@ -265,25 +212,17 @@ export function Artifact() {
     return <ArtifactCollapsed />
   }
 
-  // After the user closes the artifact and we've moved to wrapper-followup,
-  // freeze the artifact at the closing state — it stays viewable as a
-  // record of what just happened.
+  // Closed artifacts stay visible in the thread as a record of what happened.
   const interactive = arc.beat === 'artifact-active' || arc.beat === 'artifact-resolved'
 
   return (
     <section
-      ref={artifactRef}
       className={cn(
         'border-border-subtle bg-surface my-4 overflow-hidden rounded-lg border shadow-sm',
         'relative',
       )}
       aria-label="Molecular geometry explainer"
     >
-      {/* The artifact is one full-bleed 3D viewport with the header, the
-          right pane, and the representation-panels row floating on top of
-          it. MoleculeScene takes top/right/bottom inset values so its
-          safe-area math knows where the overlays sit and can center +
-          zoom the molecule into the remaining visible region. */}
       <div className="relative h-[480px] max-h-[calc(100dvh-var(--header-height)-var(--composer-height)-90px)] overflow-hidden">
         <MoleculeScene
           molecule={artifact.activeMolecule}
@@ -309,19 +248,12 @@ export function Artifact() {
             activeCue(artifact) === 'panel-materials' &&
             !artifact.panelsExplored.includes('materials')
           }
-          fullscreenTargetRef={artifactRef}
           onOpenMaterials={handleOpenMaterials}
           onReferences={() => setReferencesOpen(true)}
         />
 
         <ViewportCue artifact={artifact} />
 
-        {/* Bottom-of-viewport control pane. Each chip surfaces a label +
-            current value; click opens the actual control above. Positioned
-            to stop short of the floating right pane so popovers don't slip
-            behind it. The 5-domain row chip appears only after the ClF3
-            reveal — opening, predict-1, reveal-1, and predict-2 hide it so
-            the learner isn't offered the answer before the prediction. */}
         <ControlPane className="absolute bottom-3 left-3 z-10">
           <ControlChip
             label="View"
@@ -346,7 +278,6 @@ export function Artifact() {
           )}
         </ControlPane>
 
-        {/* Right pane as a translucent panel on top of the visualization. */}
         <aside
           className={cn(
             'absolute bottom-3 right-3 top-[60px] z-10 flex w-[356px] flex-col',
@@ -371,10 +302,6 @@ export function Artifact() {
             onOpenReferences={() => setReferencesOpen(true)}
             onIntroStatementDone={handleIntroStatementDone}
           />
-          {/* Expanded-diagram clone overlays the entire right-pane card —
-              including the stepper footer — via motion's layoutId animation.
-              The thumbnail inside the bubble stays in flow with opacity 0 so
-              content position never shifts. */}
           <AnimatePresence>
             {visibleExpandedPanel && (
               <motion.div
@@ -423,22 +350,16 @@ export function Artifact() {
   )
 }
 
-// ---------------------------------------------------------------------------
-// Header
-// ---------------------------------------------------------------------------
-
 function Header({
   title,
   attachments,
   materialsCued,
-  fullscreenTargetRef,
   onOpenMaterials,
   onReferences,
 }: {
   title: string
   attachments: ImageAttachment[]
   materialsCued: boolean
-  fullscreenTargetRef: RefObject<HTMLElement | null>
   onOpenMaterials: () => void
   onReferences: () => void
 }) {
@@ -461,143 +382,18 @@ function Header({
           <HeaderLabeledButton label="Resources" onClick={onReferences}>
             <BookOpen className="size-3.5" />
           </HeaderLabeledButton>
-          <ShareButton />
-          <FullscreenButton targetRef={fullscreenTargetRef} />
+          <HeaderIconButton label="Share">
+            <Share2 className="size-3.5" />
+          </HeaderIconButton>
+          <HeaderIconButton label="Fullscreen">
+            <Expand className="size-3.5" />
+          </HeaderIconButton>
         </div>
       </div>
     </header>
   )
 }
 
-function ShareButton() {
-  const [status, setStatus] = useState<ShareStatus>('idle')
-  const resetTimerRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    return () => {
-      if (resetTimerRef.current !== null) window.clearTimeout(resetTimerRef.current)
-    }
-  }, [])
-
-  const scheduleReset = useCallback(() => {
-    if (resetTimerRef.current !== null) window.clearTimeout(resetTimerRef.current)
-    resetTimerRef.current = window.setTimeout(() => {
-      setStatus('idle')
-      resetTimerRef.current = null
-    }, 1600)
-  }, [])
-
-  const handleShare = useCallback(async () => {
-    if (status === 'unavailable') return
-    try {
-      const url = window.location.href
-      if (await copyTextToClipboard(url)) {
-        setStatus('copied')
-        scheduleReset()
-        return
-      }
-      if (window.navigator.share) {
-        await window.navigator.share({ title: 'Why XeF2 is linear', url })
-        setStatus('idle')
-        return
-      }
-      setStatus('unavailable')
-    } catch (err) {
-      if ((err as Error)?.name === 'AbortError') return
-      setStatus('failed')
-      scheduleReset()
-    }
-  }, [scheduleReset, status])
-
-  const label =
-    status === 'unavailable'
-      ? 'Share unavailable'
-      : status === 'copied'
-        ? 'Link copied'
-        : status === 'failed'
-          ? 'Share failed'
-          : 'Share'
-
-  return (
-    <HeaderIconButton
-      label={label}
-      onClick={handleShare}
-      disabled={status === 'unavailable'}
-      tooltip={
-        status === 'unavailable'
-          ? 'Sharing is unavailable in this browser'
-          : status === 'failed'
-            ? 'Could not copy the link'
-            : status === 'copied'
-              ? 'Link copied'
-              : 'Copy link'
-      }
-    >
-      {status === 'copied' ? <Check className="size-3.5" /> : <Share2 className="size-3.5" />}
-    </HeaderIconButton>
-  )
-}
-
-function FullscreenButton({ targetRef }: { targetRef: RefObject<HTMLElement | null> }) {
-  const [isFullscreen, setIsFullscreen] = useState(false)
-  const [status, setStatus] = useState<FullscreenStatus>('idle')
-
-  useEffect(() => {
-    const onFullscreenChange = () => {
-      setIsFullscreen(document.fullscreenElement === targetRef.current)
-      setStatus('idle')
-    }
-
-    document.addEventListener('fullscreenchange', onFullscreenChange)
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
-  }, [targetRef])
-
-  const handleFullscreen = useCallback(() => {
-    const el = targetRef.current
-    if (status === 'unavailable') return
-    if (!el || !document.fullscreenEnabled || !el.requestFullscreen) {
-      setStatus('unavailable')
-      return
-    }
-    if (document.fullscreenElement === el) {
-      void document.exitFullscreen().catch(() => setStatus('failed'))
-      return
-    }
-    void el.requestFullscreen().catch(() => setStatus('failed'))
-  }, [status, targetRef])
-
-  const label =
-    status === 'unavailable'
-      ? 'Fullscreen unavailable'
-      : status === 'failed'
-        ? 'Fullscreen failed'
-        : isFullscreen
-          ? 'Exit fullscreen'
-          : 'Fullscreen'
-
-  return (
-    <HeaderIconButton
-      label={label}
-      onClick={handleFullscreen}
-      disabled={status === 'unavailable'}
-      tooltip={
-        status === 'unavailable'
-          ? 'Fullscreen is unavailable in this browser'
-          : status === 'failed'
-            ? 'Could not enter fullscreen'
-            : label
-      }
-    >
-      {isFullscreen ? <Minimize2 className="size-3.5" /> : <Expand className="size-3.5" />}
-    </HeaderIconButton>
-  )
-}
-
-/**
- * Stacked-paper thumbnail control in the artifact header. Three thumbnails
- * max, fanned out with small rotations so the stack reads as "papers". The
- * whole control opens the materials lightbox.
- */
 function MaterialsHeaderStack({
   attachments,
   cued,
@@ -609,9 +405,6 @@ function MaterialsHeaderStack({
 }) {
   if (attachments.length === 0) return null
   const visible = attachments.slice(0, 3)
-  // Per-card geometry — base layout fans the stack (leftmost tilts left,
-  // rightmost tilts right). On hover, the outer cards spread further from
-  // center and rotate a touch more, like a hand of cards being splayed.
   const center = (visible.length - 1) / 2
   // Cards are size-9 inside a h-7 button so they overhang the button bounds
   // top + bottom, giving the stack a "papers spilling out" feel.
@@ -642,10 +435,6 @@ function MaterialsHeaderStack({
         />
       )}
       <span
-        // -my-1 lets the size-9 cards overhang the h-7 button vertically.
-        // Width is fixed at the rest size so the deck-spread on hover
-        // animates the cards in place — the rightmost overhangs visually
-        // without pushing the "Attachments" label right.
         className="relative -my-1 inline-flex h-9 shrink-0"
         style={{ width: CARD_PX + (visible.length - 1) * REST_OFFSET }}
       >
@@ -679,28 +468,19 @@ function MaterialsHeaderStack({
 
 function HeaderIconButton({
   label,
-  onClick,
-  disabled,
-  tooltip,
   children,
 }: {
   label: string
-  onClick?: () => void
-  disabled?: boolean
-  tooltip?: string
   children: React.ReactNode
 }) {
   return (
     <button
       type="button"
-      onClick={disabled ? undefined : onClick}
-      disabled={disabled}
       aria-label={label}
-      title={tooltip ?? label}
+      title={label}
       className={cn(
         'text-text-tertiary hover:text-text-secondary hover:bg-state-hover inline-flex size-7',
         'items-center justify-center rounded-md transition-colors',
-        disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-text-tertiary',
       )}
     >
       {children}
@@ -731,11 +511,6 @@ function HeaderLabeledButton({
     </button>
   )
 }
-
-// ---------------------------------------------------------------------------
-// Right pane — state machine (bubble / predict / reveal / closing) +
-// persistent stepper at bottom.
-// ---------------------------------------------------------------------------
 
 type RightPaneProps = {
   artifact: ArtifactState
@@ -779,7 +554,6 @@ function RightPane({
   const isClosing = artifact.stage === 'closing'
   const isRevealHead = isReveal && artifact.bubbleIndex === 0
 
-  // State key drives the in-pane fade transition.
   const stateKey = `${artifact.stage}:${artifact.bubbleIndex}`
 
   const position = stepPosition(artifact.stage, artifact.bubbleIndex)
@@ -790,9 +564,6 @@ function RightPane({
   const canAdvance = interactive && !isPredict && !!currentBubble && !isFinalBeat
 
   return (
-    // Stacked flex: content area is min-h-0 flex-1 overflow-y-auto, footer
-    // is shrink-0. The previous absolute gradient overlay covered the
-    // closing CTAs and forced users to scroll to reach Done.
     <div className="flex h-full flex-col">
       <div className="relative min-h-0 flex-1 overflow-hidden">
         <AnimatePresence initial={false} custom={direction} mode="popLayout">
@@ -812,9 +583,6 @@ function RightPane({
             <div
               className={cn(
                 'flex min-h-full flex-col gap-3 px-4 pb-4 pt-5',
-                // Tall content (closing) anchors to the top so its CTAs sit
-                // just above the stepper; short single-bubble states center
-                // so the prose has breathing room.
                 isClosing || isPredict ? 'justify-start' : 'justify-center',
               )}
             >
@@ -854,10 +622,6 @@ function RightPane({
     </div>
   )
 }
-
-// ---------------------------------------------------------------------------
-// State content — bubble / predict / reveal / closing
-// ---------------------------------------------------------------------------
 
 function StateContent({
   artifact,
@@ -917,10 +681,6 @@ function StateContent({
 
   if (isClosing) {
     return (
-      // Bubble scrolls under the sticky CTA stack — Resources and Done stay
-      // anchored at the bottom of the visible pane regardless of bubble
-      // height. Without this, long closing copy at constrained viewports
-      // (e.g. /artifact-debug) pushed Done out of view.
       <div className="flex flex-1 flex-col gap-4">
         {currentBubble && <BubbleCard text={currentBubble.text} />}
         <div className="bg-page sticky bottom-0 -mx-1 mt-auto flex flex-col gap-1 px-1 pb-1 pt-2">
@@ -954,16 +714,7 @@ function StateContent({
     )
   }
 
-  // Bubble state (opening / mid-reveal) — render the bubble, with a
-  // "You said" attribution chip when we're entering a reveal sequence. If a
-  // literacy panel (Lewis / Wedge / Geometry) is active, surface its 2D
-  // diagram inline above the bubble: the 3D viewport shows the matching
-  // treatment, and the right pane shows the literal 2D representation.
-  //
-  // Reveal-head suppresses the inline diagram because the attribution chip
-  // already sits above the bubble there; squeezing a thumbnail between the
-  // user's prediction and the model's response breaks the conversational
-  // back-and-forth read.
+  // Reveal heads keep the user's prediction directly adjacent to the reply.
   const literacyPanel =
     !isRevealHead &&
     (artifact.activePanel === 'lewis' || artifact.activePanel === 'geometry')
@@ -1016,12 +767,6 @@ function PanelDiagramInline({
   onExpand: () => void
 }) {
   const label = panel === 'lewis' ? 'Lewis structure' : 'Molecular geometry'
-  // The thumbnail stays in flow at all times (so the bubble underneath
-  // doesn't shift when the user expands). Its `layoutId` is shared with the
-  // expanded clone overlay rendered up at the aside level — motion uses that
-  // to spring the clone from this thumbnail's bounding box on enter, and
-  // back to it on exit. We hide the thumbnail visually while expanded so it
-  // doesn't draw on top of the animating clone, but it still occupies space.
   return (
     <motion.figure
       layoutId={`panel-diagram-${panel}`}
@@ -1115,9 +860,6 @@ function StreamingBubbleText({
   return <BubbleText text={visibleText} />
 }
 
-// Keyword classes use a light bg tint of the matching legend color so the
-// element reference reads the same in the prose as it does in the 3D scene.
-// Text color stays primary for accessibility — only the background is tinted.
 const KEYWORD_REGEX = /\b(Xenon|Xe|Fluorine|F|lone pairs?)\b/g
 
 function keywordClass(token: string): string {
@@ -1177,10 +919,6 @@ function lookupLabel2(p: ArtifactPrediction2 | null): string | undefined {
   if (!p?.optionId) return undefined
   return PREDICTION_2.options.find((o) => o.id === p.optionId)?.label
 }
-
-// ---------------------------------------------------------------------------
-// Predict panel — full right-pane state with question + options + free-text
-// ---------------------------------------------------------------------------
 
 function PredictPanel<K extends string>({
   framing,
@@ -1259,10 +997,6 @@ function PredictPanel<K extends string>({
   )
 }
 
-// ---------------------------------------------------------------------------
-// Stepper
-// ---------------------------------------------------------------------------
-
 function Stepper({
   canRetreat,
   canAdvance,
@@ -1321,12 +1055,6 @@ function Stepper({
   )
 }
 
-// ---------------------------------------------------------------------------
-// Viewport cue — invites the user to interact with the 3D scene when the
-// active bubble's cue is 'viewport'. Disappears as soon as the user starts
-// rotating (rotationRad > 0).
-// ---------------------------------------------------------------------------
-
 function ViewportCue({ artifact }: { artifact: ArtifactState }) {
   const cue = activeCue(artifact)
   if (cue !== 'viewport') return null
@@ -1345,10 +1073,6 @@ function ViewportCue({ artifact }: { artifact: ArtifactState }) {
     </div>
   )
 }
-
-// ---------------------------------------------------------------------------
-// Overlays — References and Summary, openable from the header at any time
-// ---------------------------------------------------------------------------
 
 function ReferencesOverlay({ onClose }: { onClose: () => void }) {
   return (
@@ -1424,10 +1148,6 @@ function OverlayShell({
     </div>
   )
 }
-
-// ---------------------------------------------------------------------------
-// Collapsed fallback — artifact tag in a chat where the artifact state is gone
-// ---------------------------------------------------------------------------
 
 function ArtifactCollapsed() {
   return (

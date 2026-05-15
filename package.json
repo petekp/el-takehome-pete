@@ -7,8 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "verify": "tsc --noEmit && eslint"
+    "verify": "tsc --noEmit && vitest run && eslint"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "latest",
@@ -35,7 +37,8 @@
     "prettier": "^3.8.1",
     "prettier-plugin-tailwindcss": "^0.6.5",
     "tailwindcss": "^4",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.6"
   },
   "overrides": {
     "eslint-plugin-react-hooks": "^5.2.0",

@@ -11,10 +11,22 @@ import {
   type ArtifactStage,
   type ArtifactState,
   type ChipKey,
-  type ChipState,
   type PrototypeStore,
   type RepresentationPanelId,
 } from '@/lib/prototype-store'
+import {
+  addRotationToArc,
+  advanceArtifactArc,
+  clickPanelInArc,
+  createEmptyArtifact,
+  recordPrediction1InArc,
+  recordPrediction2InArc,
+  resetArtifactInArc,
+  retreatArtifactArc,
+  setChipInArc,
+  toggleChipInArc,
+  type ArcState,
+} from '@/lib/prototype-state'
 import { TRIGGER_ATTACHMENTS } from '@/lib/concepts'
 import type { Molecule, Prediction1Key, Prediction2Key } from '@/lib/artifact-script'
 import type { ImageAttachment } from '@/lib/types'
@@ -40,30 +52,12 @@ const PREDICTION_1_KEYS: Prediction1Key[] = ['notational', 'equatorial', 'atoms-
 const PREDICTION_2_KEYS: Prediction2Key[] = ['linear', 'tshape', 'pyramidal', 'unclassified']
 const CHIPS: ChipKey[] = ['bonds', 'lonePairs', 'equatorialPlane', 'angles']
 
-const DEFAULT_CHIP_STATE: ChipState = {
-  bonds: true,
-  lonePairs: true,
-  equatorialPlane: false,
-  angles: false,
-}
-
-const INITIAL_ARTIFACT: ArtifactState = {
-  stage: 'opening',
-  bubbleIndex: 0,
-  focus: 'materials',
-  activeMolecule: 'xef2',
-  chipState: DEFAULT_CHIP_STATE,
-  rotationRad: 0,
-  panelsExplored: [],
-  activePanel: null,
-  prediction1: null,
-  prediction2: null,
-  userAttachments: [],
-  openedAt: 0,
+function createDebugArtifact(): ArtifactState {
+  return createEmptyArtifact()
 }
 
 export default function ArtifactDebugPage() {
-  const [artifact, setArtifact] = useState<ArtifactState>(INITIAL_ARTIFACT)
+  const [artifact, setArtifact] = useState<ArtifactState>(() => createDebugArtifact())
 
   // Seed Naomi's attachments so the materials header stack has something to
   // render. Fetched the same way /new pre-loads them.
@@ -101,7 +95,7 @@ export default function ArtifactDebugPage() {
 
   const store: PrototypeStore = useMemo(
     () => {
-      const debugArc = {
+      const debugArc: ArcState = {
         beat: 'artifact-active' as const,
         path: 'learning' as const,
         conceptId: 'molecular-geometry' as const,
@@ -111,66 +105,42 @@ export default function ArtifactDebugPage() {
         artifactMessageId: 'debug-artifact',
         artifact,
       }
+      const applyArc = (updater: (arc: ArcState) => ArcState) => {
+        setArtifact((a) => updater({ ...debugArc, artifact: a }).artifact ?? a)
+      }
       return {
-      state: {
-        arcs: { debug: debugArc },
-        currentChatId: 'debug',
-        arc: debugArc,
-      },
-      resetArc: () => setArtifact(INITIAL_ARTIFACT),
-      setCurrentChatId: () => {},
-      fireArc: () => {},
-      chooseWrapper: () => {},
-      chooseLearn: () => {},
-      advanceArtifact: () => {
-        setArtifact((a) => {
-          const idx = STAGES.indexOf(a.stage)
-          if (idx < 0) return a
-          // Naive advance: walk bubbleIndex forward, then jump to next stage at end.
-          // Doesn't fully replicate gate logic, but the debug sidebar can jump anywhere directly.
-          return { ...a, bubbleIndex: a.bubbleIndex + 1 }
-        })
-      },
-      retreatArtifact: () => {
-        setArtifact((a) => ({ ...a, bubbleIndex: Math.max(0, a.bubbleIndex - 1) }))
-      },
-      resetArtifact: () => setArtifact(INITIAL_ARTIFACT),
-      recordPrediction1: ({ optionId, freeText }) => {
-        const key: Prediction1Key = optionId ?? 'unclassified'
-        setArtifact((a) => ({
-          ...a,
-          prediction1: { optionId, freeText, key },
-          stage: 'reveal-1',
-          bubbleIndex: 0,
-        }))
-      },
-      recordPrediction2: ({ optionId, freeText }) => {
-        const key: Prediction2Key = optionId ?? 'unclassified'
-        setArtifact((a) => ({
-          ...a,
-          prediction2: { optionId, freeText, key },
-          stage: 'reveal-2',
-          bubbleIndex: 0,
-        }))
-      },
-      closeArtifact: () => setArtifact(INITIAL_ARTIFACT),
-      toggleChip: (key) => {
-        setArtifact((a) => ({ ...a, chipState: { ...a.chipState, [key]: !a.chipState[key] } }))
-      },
-      setChip: (key, value) => {
-        setArtifact((a) => ({ ...a, chipState: { ...a.chipState, [key]: value } }))
-      },
-      clickPanel: (id) => {
-        setArtifact((a) => ({
-          ...a,
-          activePanel:
-            id === 'materials' ? a.activePanel : a.activePanel === id ? null : id,
-          panelsExplored: a.panelsExplored.includes(id) ? a.panelsExplored : [...a.panelsExplored, id],
-        }))
-      },
-      addRotation: (delta) => {
-        setArtifact((a) => ({ ...a, rotationRad: Math.min(ROTATION_GATE_RAD + 0.1, a.rotationRad + delta) }))
-      },
+        state: {
+          arcs: { debug: debugArc },
+          currentChatId: 'debug',
+          arc: debugArc,
+        },
+        resetArc: () => setArtifact(createDebugArtifact()),
+        setCurrentChatId: () => {},
+        fireArc: () => {},
+        chooseWrapper: () => {},
+        chooseLearn: () => {},
+        advanceArtifact: () => applyArc(advanceArtifactArc),
+        retreatArtifact: () => applyArc(retreatArtifactArc),
+        resetArtifact: () => applyArc((arc) => resetArtifactInArc(arc)),
+        recordPrediction1: ({ optionId, freeText }) => {
+          applyArc((arc) => recordPrediction1InArc(arc, { optionId, freeText }))
+        },
+        recordPrediction2: ({ optionId, freeText }) => {
+          applyArc((arc) => recordPrediction2InArc(arc, { optionId, freeText }))
+        },
+        closeArtifact: () => setArtifact(createDebugArtifact()),
+        toggleChip: (key) => {
+          applyArc((arc) => toggleChipInArc(arc, key))
+        },
+        setChip: (key, value) => {
+          applyArc((arc) => setChipInArc(arc, key, value))
+        },
+        clickPanel: (id) => {
+          applyArc((arc) => clickPanelInArc(arc, id))
+        },
+        addRotation: (delta) => {
+          applyArc((arc) => addRotationToArc(arc, delta))
+        },
       }
     },
     [artifact],
@@ -339,7 +309,7 @@ function DebugSidebar({ artifact, setArtifact }: DebugSidebarProps) {
 
       <button
         type="button"
-        onClick={() => setArtifact(() => INITIAL_ARTIFACT)}
+        onClick={() => setArtifact(() => createDebugArtifact())}
         className="border-border-subtle bg-page text-text-secondary hover:bg-state-hover rounded-md border px-2.5 py-1.5 text-[12px]"
       >
         Reset to initial

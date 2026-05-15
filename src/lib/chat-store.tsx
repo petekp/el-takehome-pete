@@ -19,6 +19,7 @@ import {
   type Model,
   type StreamChatResult,
 } from './api'
+import { encodeMessagesForApi } from './chat-message-api'
 import { clientMatchTrigger, getConcept } from './concepts'
 import type { ArtifactInteractionSummary } from './artifact-interaction'
 
@@ -110,48 +111,6 @@ function makeTitle(text: string) {
 
 function nextId(prefix: 'c' | 'm') {
   return `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
-}
-
-/**
- * Encode a chat message for the Anthropic API. Text-only stays as a plain
- * string for the SDK's terse path; if attachments are present, switch to the
- * content-block array shape with one image block per attachment.
- *
- * UI-only tags (<artifact/>, <affordance/>) are sent through to the routes
- * as-is — the API boundary sanitizes them so the server can also branch
- * on their presence (e.g. suppress arc-firing when an artifact already
- * resolved in this chat).
- */
-function encodeMessageForApi(m: Message): {
-  role: 'user' | 'assistant'
-  content:
-    | string
-    | Array<
-        | { type: 'text'; text: string }
-        | {
-            type: 'image'
-            source: { type: 'base64'; media_type: string; data: string }
-          }
-      >
-} {
-  if (m.role !== 'user' || !m.attachments || m.attachments.length === 0) {
-    return { role: m.role, content: m.text }
-  }
-  const blocks: Array<
-    | { type: 'text'; text: string }
-    | {
-        type: 'image'
-        source: { type: 'base64'; media_type: string; data: string }
-      }
-  > = []
-  for (const att of m.attachments) {
-    blocks.push({
-      type: 'image',
-      source: { type: 'base64', media_type: att.mediaType, data: att.data },
-    })
-  }
-  if (m.text.length > 0) blocks.push({ type: 'text', text: m.text })
-  return { role: m.role, content: blocks }
 }
 
 export function ChatProvider({ children }: { children: ReactNode }) {
@@ -275,7 +234,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           endpoint: '/api/chat',
           body: {
             model: model.id,
-            messages: history.map(encodeMessageForApi),
+            messages: encodeMessagesForApi(history),
             ...(extras?.artifactInteraction
               ? { artifactInteraction: extras.artifactInteraction }
               : {}),
