@@ -16,6 +16,15 @@ import { useEffect, useState, type ReactNode } from 'react'
 
 const COLLAPSED_KEY = 'education-labs:sidebar-collapsed'
 
+function toStableDomId(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]/g, '-')
+}
+
+// Routes that opt out of the AppShell chrome (sidebar, providers in the
+// children). Useful for narration/recording surfaces where the chat shell
+// would be a distraction.
+const STANDALONE_ROUTE_PREFIXES = ['/evolution']
+
 export function AppShell({ children }: { children: ReactNode }) {
   const { config, chats, deleteChat } = useChatStore()
   const pathname = usePathname()
@@ -28,6 +37,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setCollapsed(localStorage.getItem(COLLAPSED_KEY) === '1')
   }, [])
+
+  if (STANDALONE_ROUTE_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
+    return <>{children}</>
+  }
 
   const toggleSidebar = () => {
     setCollapsed((c) => {
@@ -59,6 +72,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <SidebarChatItem
                 key={chat.id}
                 href={`/chat/${chat.id}`}
+                menuId={`sidebar-chat-${toStableDomId(chat.id)}`}
                 onDelete={() => handleDelete(chat.id)}
               >
                 {chat.title}

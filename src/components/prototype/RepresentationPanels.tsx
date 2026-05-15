@@ -7,21 +7,18 @@ import type { ElementCue, Molecule } from '@/lib/artifact-script'
 import type { ImageAttachment } from '@/lib/types'
 
 /**
- * The row of compact representation cards above the 3D viewport edge.
+ * The View select menu — surfaces the literacy representations the user
+ * can apply as a 3D treatment.
  *
- * Three cards:
- *   - Lewis structure (3D viewport flattens to a desaturated 2D-style view)
- *   - Wedge-and-dash (3D viewport re-renders bonds as wedges/dashes)
- *   - Geometry chart (3D viewport foregrounds shape name, angles)
+ * Two cards (down from three: wedge-and-dash was removed because for linear
+ * XeF2 it produces a misleading or trivially-flat view):
+ *   - Lewis structure   (3D viewport flattens to a 2D-style view)
+ *   - Molecular geometry (3D viewport foregrounds shape name + angle)
  *
- * The card is the affordance, the 3D treatment is the lesson. Cards keep the
- * same shape between inactive and active states — only colour and the
- * accent border distinguish them. If the row overflows horizontally the
- * container scrolls and the cropped side fades out with a linear-gradient
- * mask, hinting that more content is in that direction.
- *
- * A bubble can broadcast a cue ('panel-lewis', 'panels-row', …) which pulses
- * the matching card(s) softly until the user clicks them.
+ * The 2D diagrams render in the right pane next to the bubble so the user
+ * sees the literal 2D representation alongside the explanation. A bubble
+ * can broadcast a cue ('panel-lewis', 'panels-row', …) which pulses the
+ * matching card(s) softly until the user clicks them.
  */
 
 type LiteracyPanelId = Exclude<RepresentationPanelId, 'materials'>
@@ -32,19 +29,10 @@ type PanelMeta = {
 }
 
 const PANELS: PanelMeta[] = [
-  { id: 'lewis', label: 'Lewis' },
-  { id: 'wedge', label: 'Wedge-and-dash' },
-  { id: 'geometry', label: 'Geometry chart' },
+  { id: 'lewis', label: 'Lewis structure' },
+  { id: 'geometry', label: 'Molecular geometry' },
 ]
 
-/**
- * The 2D diagrams that used to live inside each card. They now render in the
- * right pane next to the bubble so the user sees the literal 2D structure
- * alongside the explanation, while the 3D viewport carries the corresponding
- * treatment. Exported so Artifact can pick the right one based on the active
- * panel. `expanded` swaps to a larger render so the diagram fills the whole
- * right-pane content area.
- */
 export function PanelDiagram({
   panel,
   molecule,
@@ -55,7 +43,6 @@ export function PanelDiagram({
   expanded?: boolean
 }) {
   if (panel === 'lewis') return <LewisDiagram molecule={molecule} expanded={expanded} />
-  if (panel === 'wedge') return <WedgeDashDiagram molecule={molecule} expanded={expanded} />
   return <GeometryCard molecule={molecule} expanded={expanded} />
 }
 
@@ -63,7 +50,6 @@ function cueMatchesPanel(cue: ElementCue | null, panel: LiteracyPanelId): boolea
   if (!cue) return false
   if (cue === 'panels-row') return true
   if (cue === 'panel-lewis') return panel === 'lewis'
-  if (cue === 'panel-wedge') return panel === 'wedge'
   if (cue === 'panel-geometry') return panel === 'geometry'
   return false
 }
@@ -226,134 +212,124 @@ function Bond({ x1, y1, x2, y2 }: { x1: number; y1: number; x2: number; y2: numb
   )
 }
 
-/** F atom with three lone pairs (top, sides — schematic). */
-function FluorineWithLonePairs({ cx, cy }: { cx: number; cy: number }) {
+type BondDirection = 'up' | 'down' | 'left' | 'right'
+
+/** F atom (octet) — bond on one side, three lone pairs on the other three.
+ *  Each lone pair is a 2-dot cluster oriented perpendicular to its radial
+ *  axis so the pair sits "around" the atom rather than pointing away. The
+ *  radial OFFSET clears the 11-unit-tall F glyph by a comfortable margin so
+ *  the up/down pairs don't visually merge with the label. */
+function FluorineWithLonePairs({
+  cx,
+  cy,
+  bondDirection,
+}: {
+  cx: number
+  cy: number
+  bondDirection: BondDirection
+}) {
+  const sides: BondDirection[] = (['up', 'down', 'left', 'right'] as const).filter(
+    (s) => s !== bondDirection,
+  )
+  const r = LEWIS_DOT_R / 1.4
+  const RADIAL_OFFSET = 7.5
+  const PAIR_GAP = 1.6
   return (
     <g>
       <AtomLabel x={cx} y={cy} label="F" />
-      {/* three small lone-pair dots clusters around the F */}
-      <circle cx={cx - 5} cy={cy} r={LEWIS_DOT_R / 1.4} fill={LEWIS_STROKE} />
-      <circle cx={cx - 5} cy={cy + 3} r={LEWIS_DOT_R / 1.4} fill={LEWIS_STROKE} />
-      <circle cx={cx + 5} cy={cy} r={LEWIS_DOT_R / 1.4} fill={LEWIS_STROKE} />
-      <circle cx={cx + 5} cy={cy + 3} r={LEWIS_DOT_R / 1.4} fill={LEWIS_STROKE} />
+      {sides.map((side) => {
+        if (side === 'up') {
+          return (
+            <g key={side}>
+              <circle cx={cx - PAIR_GAP} cy={cy - RADIAL_OFFSET} r={r} fill={LEWIS_STROKE} />
+              <circle cx={cx + PAIR_GAP} cy={cy - RADIAL_OFFSET} r={r} fill={LEWIS_STROKE} />
+            </g>
+          )
+        }
+        if (side === 'down') {
+          return (
+            <g key={side}>
+              <circle cx={cx - PAIR_GAP} cy={cy + RADIAL_OFFSET} r={r} fill={LEWIS_STROKE} />
+              <circle cx={cx + PAIR_GAP} cy={cy + RADIAL_OFFSET} r={r} fill={LEWIS_STROKE} />
+            </g>
+          )
+        }
+        if (side === 'left') {
+          return (
+            <g key={side}>
+              <circle cx={cx - RADIAL_OFFSET} cy={cy - PAIR_GAP} r={r} fill={LEWIS_STROKE} />
+              <circle cx={cx - RADIAL_OFFSET} cy={cy + PAIR_GAP} r={r} fill={LEWIS_STROKE} />
+            </g>
+          )
+        }
+        return (
+          <g key={side}>
+            <circle cx={cx + RADIAL_OFFSET} cy={cy - PAIR_GAP} r={r} fill={LEWIS_STROKE} />
+            <circle cx={cx + RADIAL_OFFSET} cy={cy + PAIR_GAP} r={r} fill={LEWIS_STROKE} />
+          </g>
+        )
+      })}
     </g>
   )
 }
 
 function LewisXef2() {
+  // F-Xe-F drawn vertically. The three Xe lone pairs are placed in clearly
+  // unbonded positions around Xe so no glyph intersects a bond, label, or
+  // another LP. With the vertical bond axis blocking 12 and 6 o'clock, we
+  // stack two LPs on the left side and put the third on the right.
   return (
     <g>
-      {/* Lone pairs on Xe (left, right, top) */}
-      <circle cx={32} cy={37} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={32} cy={43} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={68} cy={37} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={68} cy={43} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={47} cy={28} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={53} cy={28} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      {/* Bonds */}
+      {/* Bonds first so the dots layer on top if anything were close */}
       <Bond x1={50} y1={40} x2={50} y2={14} />
       <Bond x1={50} y1={40} x2={50} y2={66} />
+      {/* LP 1 — middle-left horizontal pair */}
+      <circle cx={28} cy={40} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={32} cy={40} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      {/* LP 2 — upper-left horizontal pair */}
+      <circle cx={28} cy={32} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={32} cy={32} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      {/* LP 3 — middle-right horizontal pair */}
+      <circle cx={68} cy={40} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={72} cy={40} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
       <AtomLabel x={50} y={40} label="Xe" />
-      <FluorineWithLonePairs cx={50} cy={10} />
-      <FluorineWithLonePairs cx={50} cy={70} />
+      <FluorineWithLonePairs cx={50} cy={10} bondDirection="down" />
+      <FluorineWithLonePairs cx={50} cy={70} bondDirection="up" />
     </g>
   )
 }
 
 function LewisClf3() {
+  // T-shaped: three F bonds (axial up, axial down, equatorial right) plus
+  // two lone pairs on Cl. Both LPs sit on the bondless left side, stacked
+  // so neither overlaps the right-side equatorial bond.
   return (
     <g>
-      {/* Two lone pairs on Cl — left and right */}
-      <circle cx={32} cy={37} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={32} cy={43} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={68} cy={37} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={68} cy={43} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      {/* Bonds */}
       <Bond x1={50} y1={40} x2={50} y2={14} />
       <Bond x1={50} y1={40} x2={50} y2={66} />
       <Bond x1={50} y1={40} x2={84} y2={40} />
+      {/* LP 1 — upper-left pair */}
+      <circle cx={28} cy={32} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={32} cy={32} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      {/* LP 2 — lower-left pair */}
+      <circle cx={28} cy={48} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
+      <circle cx={32} cy={48} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
       <AtomLabel x={50} y={40} label="Cl" />
-      <FluorineWithLonePairs cx={50} cy={10} />
-      <FluorineWithLonePairs cx={50} cy={70} />
-      <FluorineWithLonePairs cx={88} cy={40} />
+      <FluorineWithLonePairs cx={50} cy={10} bondDirection="down" />
+      <FluorineWithLonePairs cx={50} cy={70} bondDirection="up" />
+      <FluorineWithLonePairs cx={88} cy={40} bondDirection="left" />
     </g>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Wedge-and-dash diagrams — schematic for trigonal bipyramidal.
-// ---------------------------------------------------------------------------
-
-function WedgeDashDiagram({
-  molecule,
-  expanded = false,
-}: {
-  molecule: Molecule
-  expanded?: boolean
-}) {
-  return (
-    <svg
-      viewBox="0 0 100 80"
-      preserveAspectRatio="xMidYMid meet"
-      className={cn('text-text-primary', expanded ? 'h-auto w-full max-w-[300px]' : 'h-[88px] w-[110px]')}
-    >
-      {(molecule === 'xef2' || molecule === 'xef2-axial-strain') && <WedgeXef2 />}
-      {molecule === 'clf3' && <WedgeClf3 />}
-    </svg>
-  )
-}
-
-function WedgeXef2() {
-  // F's axial (top and bottom). Lone pairs in the equatorial plane —
-  // represented as paired dots in the plane.
-  return (
-    <g>
-      {/* Axial F's */}
-      <Bond x1={50} y1={40} x2={50} y2={14} />
-      <Bond x1={50} y1={40} x2={50} y2={66} />
-      <AtomLabel x={50} y={40} label="Xe" />
-      <AtomLabel x={50} y={10} label="F" />
-      <AtomLabel x={50} y={70} label="F" />
-      {/* Equatorial lone pair dots — three pairs around Xe */}
-      <circle cx={28} cy={42} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={32} cy={38} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={72} cy={38} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={68} cy={42} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={47} cy={56} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={53} cy={56} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-    </g>
-  )
-}
-
-function WedgeClf3() {
-  // Two axial F's, one equatorial F with a wedge bond (toward viewer).
-  return (
-    <g>
-      <Bond x1={50} y1={40} x2={50} y2={14} />
-      <Bond x1={50} y1={40} x2={50} y2={66} />
-      {/* Equatorial F as a wedge */}
-      <polygon points="56,42 78,38 78,46" fill={LEWIS_STROKE} />
-      <AtomLabel x={50} y={40} label="Cl" />
-      <AtomLabel x={50} y={10} label="F" />
-      <AtomLabel x={50} y={70} label="F" />
-      <AtomLabel x={84} y={42} label="F" />
-      {/* Two equatorial lone pairs */}
-      <circle cx={28} cy={42} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={32} cy={38} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={47} cy={58} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-      <circle cx={53} cy={58} r={LEWIS_DOT_R} fill={LEWIS_STROKE} />
-    </g>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Geometry chart card — shape name, bond angle, domain count.
+// Molecular-geometry card — shape name + characteristic bond angle.
 // ---------------------------------------------------------------------------
 
 const GEOMETRY_FACTS: Record<Molecule, { shape: string; angle: string; domains: string }> = {
   xef2: {
     shape: 'Linear',
-    angle: '180°',
+    angle: 'F–Xe–F = 180°',
     domains: '2 bonded, 3 lone',
   },
   'xef2-axial-strain': {

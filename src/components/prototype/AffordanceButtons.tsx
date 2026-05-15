@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui'
 import { usePrototypeStore } from '@/lib/prototype-store'
 import { getConcept } from '@/lib/concepts'
+import { Search } from 'lucide-react'
 
 /**
  * Renders the two-button affordance inline inside an assistant message.
@@ -35,6 +36,7 @@ export function AffordanceButtons() {
           onClick={chooseLearn}
           className="border-accent text-accent-strong hover:bg-accent/10"
         >
+          <Search className="size-4" aria-hidden="true" />
           {labels.learn}
         </Button>
       </div>

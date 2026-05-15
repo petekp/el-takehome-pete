@@ -1,6 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { ENVELOPE_CONTENT_TYPE, EnvelopeEncoder } from '@/lib/protocol'
 import { getConcept, type ConceptId } from '@/lib/concepts'
+import type {
+  ArtifactInteractionSummary,
+  PredictionSummary,
+} from '@/lib/artifact-interaction'
 
 /**
  * The "just answer it" / decline path AND the post-artifact follow-up.
@@ -34,21 +38,126 @@ type IncomingMessage = {
       >
 }
 
-function wrapperSystemPrompt(conceptId: ConceptId, afterLearning: boolean): string {
+function latestUserMessage(messages: IncomingMessage[]): IncomingMessage | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message.role === 'user') return message
+  }
+  return null
+}
+
+/**
+ * Hint lines describing the most recallable moments from her artifact session.
+ * These get spliced into the afterLearning system prompt so the follow-up
+ * can land like a friend recalling a shared moment, not a recap of telemetry.
+ *
+ * Generated as one short past-tense observation per signal. The prompt then
+ * tells Claude to use AT MOST ONE of them — never enumerate.
+ */
+function describePrediction1(p: PredictionSummary): string | null {
+  switch (p.bucket) {
+    case 'equatorial':
+      return 'On the why-equatorial question she picked the right answer — the equatorial seats have more room (fewer 90° neighbors).'
+    case 'blocking':
+      return 'On the why-equatorial question she stayed on her "blocking" framing — that intuition got bridged into the spatial story rather than corrected.'
+    case 'atoms-push':
+      return 'On the why-equatorial question she thought the F atoms push the lone pairs out — the relationship was actually the reverse.'
+    case 'counting':
+      return 'On the why-equatorial question she answered the counting/octet side instead of the spatial side.'
+    case 'notational':
+      return 'On the why-equatorial question she thought the equatorial placement was a 2D drawing convention.'
+    case 'idk':
+      return 'She passed on the why-equatorial prediction with an "I don\'t know" — no commitment to a wrong model, just unfamiliarity.'
+    case 'unclassified':
+      return p.freeText
+        ? `On the why-equatorial question she wrote: "${p.freeText.slice(0, 200)}".`
+        : null
+    default:
+      return null
+  }
+}
+
+function describePrediction2(p: PredictionSummary): string | null {
+  switch (p.bucket) {
+    case 'tshape':
+      return 'On the 5-domains / 2-lone-pairs prediction she got T-shape right.'
+    case 'linear':
+      return 'On the 5-domains / 2-lone-pairs prediction she guessed linear — the "lone-pair count changes the shape" idea hadn\'t fully clicked yet, but the reveal addressed it.'
+    case 'pyramidal':
+      return 'On the 5-domains / 2-lone-pairs prediction she guessed trigonal pyramidal — that\'s a 4-domain shape, not a 5-domain shape.'
+    case 'unclassified':
+      return p.freeText
+        ? `On the 5-domains / 2-lone-pairs prediction she wrote: "${p.freeText.slice(0, 200)}".`
+        : null
+    default:
+      return null
+  }
+}
+
+function describeInteractions(s: ArtifactInteractionSummary): string[] {
+  const lines: string[] = []
+  if (s.prediction1) {
+    const l = describePrediction1(s.prediction1)
+    if (l) lines.push(l)
+  }
+  if (s.prediction2) {
+    const l = describePrediction2(s.prediction2)
+    if (l) lines.push(l)
+  }
+  if (!s.completedFullArc) {
+    lines.push('She closed the artifact before reaching the closing synthesis — treat the follow-up as picking up mid-thread rather than wrapping up.')
+  }
+  if (s.manuallyRotated) {
+    lines.push('She rotated the 3D molecule herself to look at the geometry from different angles.')
+  }
+  if (s.timeInArtifactSec > 0 && s.timeInArtifactSec < 25) {
+    lines.push('She moved through the artifact quickly (under ~25 seconds) — likely scanned more than dwelled.')
+  }
+  return lines
+}
+
+function wrapperSystemPrompt(
+  conceptId: ConceptId,
+  afterLearning: boolean,
+  artifactInteraction?: ArtifactInteractionSummary,
+): string {
   const concept = getConcept(conceptId)
   if (afterLearning) {
-    return [
+    const interactionLines = artifactInteraction ? describeInteractions(artifactInteraction) : []
+    const sections: string[] = [
       `You are Claude. The student just went through a short predict→reveal→reflect exchange about ${concept.descriptors.title} — specifically XeF2 (5 domains, 3 lone pairs) and the broader 5-domain row of her chart.`,
-      '',
       "She now sees that the three lone pairs sit in the equatorial plane (more space, fewer 90° neighbors), leaving the two axial positions for the F atoms — which is why the molecule is linear. She also saw the same logic extend to T-shape (2 lone pairs) and would extend to see-saw (1 lone pair).",
-      '',
-      "Now you're closing the loop in chat: a warm, peer-level follow-up that picks up where the artifact ended. It should:",
-      '  1. Open with a short bridging line — something like "happy to keep going" — without quoting the artifact verbatim.',
-      "  2. Offer to look at any other row of her chart that's confusing (e.g. 6 domains, or the bent shapes that often trip people up), OR any specific molecule she's stuck on. Frame it as an open invitation, not a list.",
-      '  3. Two to three short sentences total. No headings, no bullets, no code.',
-      '',
+    ]
+    const hasCues = interactionLines.length > 0
+    if (hasCues) {
+      sections.push(
+        [
+          'WHAT SHE JUST DID INSIDE THE ARTIFACT (your memory of the session — NOT data to recite):',
+          ...interactionLines.map((l) => `  - ${l}`),
+          '',
+          'How to use these cues:',
+          '  - These are the most concrete thing you know about her right now. Lean on them: a follow-up that lands one short, specific callback feels like a friend who was actually there. A follow-up with no callback feels generic.',
+          '  - Pick ONE moment that lands cleanly and weave it into the bridging line. Phrase it in your own words; do NOT quote the cue text or the prediction option labels verbatim.',
+          '  - Never enumerate. Never read multiple cues back. Never use phrases like "I saw you..." or "you did X then Y" — those sound like a log.',
+          '  - Do not grade or score. No "great job" / "nice work" / "you got that one right".',
+          '  - If she got a prediction wrong, the reveal already addressed it — do NOT re-correct it here. Just acknowledge the moment lightly and move on.',
+          '  - Only skip the callback entirely if NONE of the cues can be referenced without sounding clinical.',
+        ].join('\n'),
+      )
+    }
+    const bridgingLine = hasCues
+      ? '  1. Open with a short bridging line that lands the one callback you chose (from the cues above), in your own words. Make it feel like a friend continuing a conversation, not a recap.'
+      : '  1. Open with a short bridging line — something like "happy to keep going" — without quoting the artifact verbatim.'
+    sections.push(
+      [
+        "Now you're closing the loop in chat: a warm, peer-level follow-up that picks up where the artifact ended. It should:",
+        bridgingLine,
+        "  2. Offer to look at any other row of her chart that's confusing (e.g. 6 domains, or the bent shapes that often trip people up), OR any specific molecule she's stuck on. Frame it as an open invitation, not a list.",
+        '  3. Two to three short sentences total. No headings, no bullets, no code.',
+      ].join('\n'),
       "Tone: jovial, knowledgeable friend. Plainspoken. No tutoring. No \"great work!\" or scoring. Don't re-explain the concept the artifact already covered. Do not emit any custom tags.",
-    ].join('\n')
+    )
+    return sections.join('\n\n')
   }
   return [
     `You are Claude. The student asked about XeF2 — 5 electron domains, 3 lone pairs, molecular geometry linear, electron-domain geometry trigonal bipyramidal. She attached a VSEPR chart and her Lewis drawing. The underlying concept is ${concept.descriptors.title}.`,
@@ -73,9 +182,16 @@ export async function POST(req: Request) {
     conceptId: ConceptId
     messages: IncomingMessage[]
     afterLearning?: boolean
+    artifactInteraction?: ArtifactInteractionSummary | null
   }
-  const { conceptId, messages, afterLearning = false } = body
+  const {
+    conceptId,
+    messages,
+    afterLearning = false,
+    artifactInteraction,
+  } = body
   const client = new Anthropic({ apiKey })
+  const latestUser = latestUserMessage(messages)
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -85,11 +201,23 @@ export async function POST(req: Request) {
       envelope.meta({ isArc: false, conceptId })
 
       try {
+        if (!latestUser) {
+          throw new Error('/api/wrapper-response requires at least one user message')
+        }
+
         const messageStream = client.messages.stream({
           model: MODEL,
           max_tokens: 1024,
-          system: wrapperSystemPrompt(conceptId, afterLearning),
-          messages,
+          system: wrapperSystemPrompt(
+            conceptId,
+            afterLearning,
+            artifactInteraction ?? undefined,
+          ),
+          // Button clicks do not add a fresh user turn, so the chat history can
+          // end with Claude's affordance message. Sonnet 4.6 rejects that as an
+          // assistant prefill; this completion only needs the latest student
+          // turn and its attachments as grounding context.
+          messages: [latestUser],
         })
         messageStream.on('text', (delta) => envelope.text(delta))
         await messageStream.finalMessage()

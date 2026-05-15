@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "record_id": "continuity-09a0f95d-64aa-4139-8457-0bbfa024340e",
+  "project_root": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main",
+  "created_at": "2026-05-15T02:02:31.278Z",
+  "git": {
+    "cwd": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main"
+  },
+  "narrative": {
+    "goal": "Apply iterative UI/UX polish to the XeF2 artifact via Agentation MCP feedback; next session will execute a non-trivial implementation plan from new user feedback.",
+    "next": "In a new session: receive the user's implementation plan, then make non-trivial structural changes to the prototype to improve effectiveness.",
+    "state_markdown": "- GitHub: pushed repo to https://github.com/petekp/el-takehome-pete (public). Local dir still education-labs-takehome-main (not renamed because dev server + TS server + agentation MCP were holding paths).\n- New primitives: src/components/prototype/ControlPane.tsx exports ControlPane (unified rounded pane: border, bg-page/97, backdrop-blur-md) and ControlChip (label + active value + ChevronUp affordance + motion-animated popover above on hover; popover defaults rounded-full + px-2 py-1 + flex items-center, popoverClassName overrides).\n- View ControlChip = vertical SELECT MENU. RepresentationPanels.tsx fully redesigned to a role=\"menu\" with w-44 vertical rows (Check icon on active item). ToggleGroup wrapper + scroll/mask logic deleted. ToggleGroup primitive itself still exists in src/components/ui but is unused — safe to delete.\n- Lone-pairs ControlChip = slider popover. LonePairSlider stripped of label/value/shape — now bare slider w-[140px] inside a h-7 inline-flex wrapper so it centers cleanly.\n- Right-pane <aside> card: bg-page/97, NO shadow, backdrop-blur-md (was bg-surface/85 + shadow-md).\n- Right-pane footer fade gradient: from-surface → from-page (matches new bg).\n- Header (Artifact.tsx): removed Close X button (and onClose prop), removed bg-border-subtle h-5 w-px divider.\n- MaterialsHeaderStack: button h-7 matching Resources, cards bumped to size-9 with -my-1 on the stack span so they overhang the button vertically. Deck-spread on hover via motion variants on motion.button + motion.img (spring 320/20/0.5; REST_ROT 7° → HOVER_ROT 16°; +9px outward x per card from center). The stack span is now a plain <span> with FIXED width (REST size only) — width animation removed so cards bleed visually right on hover but the \"Attachments\" label stays put.\n- BUG FIX: MoleculeScene.tsx:1955 changed `treatment === default` → `treatment !== wedge`. Lewis + geometry bonds are cylinders too and now get tracked in bondMeshes, so applyDeformation moves them with their atoms during LP drag. Verified visually: dragging LP in Lewis mode no longer detaches atoms from bond endpoints.\n- Build clean across all changes.",
+    "debt_markdown": "- Pre-existing Next.js 16 Server-Action lint warnings on `onRotationDelta` + `onExitTreatment` (MoleculeScene.tsx:498, 502), `onChange` (LonePairSlider, MoleculeScene.tsx:1425), and `onClose` (MaterialsLightbox, RepresentationPanels.tsx). Functionally harmless — tagged across this session as expected.\n- Fullscreen + Share header buttons are still no-op stubs. Fullscreen is intended to use document.startViewTransition eventually.\n- ClF3 axial-axial angle still rendered as 180° idealized in 3D (real value ~87.5°).\n- Three.js camera animation directly mutates camera.position.lerp while OrbitControls.update() runs each frame — rotation during a treatment transition could feel jittery if the user drags mid-animation.\n- ToggleGroup primitive (src/components/ui/ToggleGroup.tsx) is now unreferenced after the View select-menu refactor — safe to delete in cleanup.\n- Local dir rename to el-takehome-pete still pending (need to stop dev server, TS server, and agentation MCP first).\n- Active Agentation session: mp5zqxhq-zj9x4x. All annotations from this session are resolved as of handoff."
+  },
+  "continuity_kind": "standalone",
+  "resume_contract": {
+    "mode": "resume_standalone",
+    "auto_resume": false,
+    "requires_explicit_resume": true
+  }
+}

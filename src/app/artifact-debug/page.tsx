@@ -34,7 +34,7 @@ import { cn } from '@/lib/utils'
  */
 
 const STAGES: ArtifactStage[] = ['opening', 'predict-1', 'reveal-1', 'predict-2', 'reveal-2', 'closing']
-const PANELS: (RepresentationPanelId | 'none')[] = ['none', 'materials', 'lewis', 'wedge', 'geometry']
+const PANELS: (RepresentationPanelId | 'none')[] = ['none', 'materials', 'lewis', 'geometry']
 const MOLECULES: Molecule[] = ['xef2', 'xef2-axial-strain', 'clf3']
 const PREDICTION_1_KEYS: Prediction1Key[] = ['notational', 'equatorial', 'atoms-push', 'unclassified']
 const PREDICTION_2_KEYS: Prediction2Key[] = ['linear', 'tshape', 'pyramidal', 'unclassified']
@@ -59,6 +59,7 @@ const INITIAL_ARTIFACT: ArtifactState = {
   prediction1: null,
   prediction2: null,
   userAttachments: [],
+  openedAt: 0,
 }
 
 export default function ArtifactDebugPage() {
@@ -99,20 +100,25 @@ export default function ArtifactDebugPage() {
   }, [])
 
   const store: PrototypeStore = useMemo(
-    () => ({
+    () => {
+      const debugArc = {
+        beat: 'artifact-active' as const,
+        path: 'learning' as const,
+        conceptId: 'molecular-geometry' as const,
+        chatId: 'debug',
+        triggerMessageId: 'debug-trigger',
+        affordanceMessageId: 'debug-affordance',
+        artifactMessageId: 'debug-artifact',
+        artifact,
+      }
+      return {
       state: {
-        arc: {
-          beat: 'artifact-active',
-          path: 'learning',
-          conceptId: 'molecular-geometry',
-          chatId: 'debug',
-          triggerMessageId: 'debug-trigger',
-          affordanceMessageId: 'debug-affordance',
-          artifactMessageId: 'debug-artifact',
-          artifact,
-        },
+        arcs: { debug: debugArc },
+        currentChatId: 'debug',
+        arc: debugArc,
       },
       resetArc: () => setArtifact(INITIAL_ARTIFACT),
+      setCurrentChatId: () => {},
       fireArc: () => {},
       chooseWrapper: () => {},
       chooseLearn: () => {},
@@ -163,7 +169,8 @@ export default function ArtifactDebugPage() {
       addRotation: (delta) => {
         setArtifact((a) => ({ ...a, rotationRad: Math.min(ROTATION_GATE_RAD + 0.1, a.rotationRad + delta) }))
       },
-    }),
+      }
+    },
     [artifact],
   )
 

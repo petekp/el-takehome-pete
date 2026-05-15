@@ -36,6 +36,8 @@ These shaped moment-by-moment decisions throughout the design. They constrain to
 - No spaced-repetition scheduler in this prototype. The chrome offers the affordance; the destination is stubbed.
 - No mascot, no celebratory animations, no "Great job!" feedback. Adult register throughout.
 
+**Take-home prototype:** The starter app seeds `/new` with the canonical scenario (message and attachments) so evaluators can run the arc with one send. That seeding is assignment scaffolding for the provided chat shell, not a claim that a shipped product should pre-fill the composer.
+
 ## The arc of the experience
 
 Someone is working in Claude. They send a message that pattern-matches a fix to a problem they don't fully understand. In response, Claude does something slightly unusual: rather than just performing the requested task, it offers a brief, framed alternative — spend ninety seconds understanding what's actually happening first, and the original task is still available either way. Both paths are real.

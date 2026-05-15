@@ -124,12 +124,24 @@ type SidebarChatItemProps = {
   href: string
   children: ReactNode
   onDelete?: () => void
+  menuId?: string
   className?: string
 }
 
-export function SidebarChatItem({ href, children, onDelete, className }: SidebarChatItemProps) {
+function toStableDomId(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]/g, '-')
+}
+
+export function SidebarChatItem({
+  href,
+  children,
+  onDelete,
+  menuId,
+  className,
+}: SidebarChatItemProps) {
   const pathname = usePathname()
   const active = pathname === href
+  const stableMenuId = menuId ?? `sidebar-chat-${toStableDomId(href)}`
 
   return (
     <li className="group/item relative">
@@ -148,6 +160,7 @@ export function SidebarChatItem({ href, children, onDelete, className }: Sidebar
       {onDelete && (
         <Menu.Root>
           <Menu.Trigger
+            id={`${stableMenuId}-trigger`}
             aria-label="Chat options"
             className="text-text-secondary hover:bg-state-hover absolute right-1 top-1 flex size-6 cursor-pointer items-center justify-center rounded-sm opacity-0 transition-opacity group-hover/item:opacity-100 data-[popup-open]:opacity-100"
           >
@@ -156,7 +169,10 @@ export function SidebarChatItem({ href, children, onDelete, className }: Sidebar
 
           <Menu.Portal>
             <Menu.Positioner side="bottom" align="end" sideOffset={4} className="z-50">
-              <Menu.Popup className="bg-surface shadow-popover min-w-44 rounded-lg p-1 outline-none">
+              <Menu.Popup
+                id={`${stableMenuId}-popup`}
+                className="bg-surface shadow-popover min-w-44 rounded-lg p-1 outline-none"
+              >
                 <Menu.Item
                   onClick={onDelete}
                   className="text-danger data-[highlighted]:bg-state-hover flex cursor-pointer items-center gap-3 rounded-sm px-2.5 py-2 text-sm outline-none"

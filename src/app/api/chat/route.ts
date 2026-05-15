@@ -8,6 +8,12 @@ import {
   type ConceptId,
 } from '@/lib/concepts'
 import { defaultRetryable, withBackoff } from '@/lib/retry'
+import {
+  ARTIFACT_PLACEHOLDER,
+  postArtifactSystemPrompt,
+  sanitizeAssistantTextForModel,
+} from '@/lib/artifact-narration'
+import type { ArtifactInteractionSummary } from '@/lib/artifact-interaction'
 
 // Node runtime (Fluid Compute on Vercel). The classifier requires tool-use,
 // which doesn't run reliably on the edge runtime.
@@ -164,15 +170,29 @@ export async function POST(req: Request) {
   const body = (await req.json()) as {
     model: string
     messages: IncomingMessage[]
+    artifactInteraction?: ArtifactInteractionSummary | null
   }
-  const { model, messages } = body
+  const { model, messages, artifactInteraction } = body
   const client = new Anthropic({ apiKey })
   const latestContent = latestUserBlocks(messages) ?? ''
 
+  // If an artifact has already been opened in this chat, suppress the
+  // affordance/arc path even if the classifier matches: she's almost
+  // certainly asking ABOUT the artifact (or in its wake), not asking for
+  // a fresh walkthrough on the same concept. We detect this by looking
+  // for the raw <artifact/> placeholder in the assistant history.
+  const arcAlreadyResolved = messages.some(
+    (m) =>
+      m.role === 'assistant' &&
+      typeof m.content === 'string' &&
+      m.content.trim() === ARTIFACT_PLACEHOLDER,
+  )
+
   // 1. Classify. Failures fall through to non-arc chat — never block the chat
-  //    response on a flaky classifier.
+  //    response on a flaky classifier. Skipped when an arc is already
+  //    resolved (no need to re-fire).
   let classified: ClassifierResult = { conceptId: null, reasoning: '' }
-  if (latestContent) {
+  if (latestContent && !arcAlreadyResolved) {
     try {
       classified = await classify(client, latestContent)
     } catch (err) {
@@ -181,7 +201,15 @@ export async function POST(req: Request) {
   }
 
   const concept = classified.conceptId ? getConcept(classified.conceptId) : null
-  const isArc = concept !== null
+  const isArc = concept !== null && !arcAlreadyResolved
+
+  // Sanitize UI-only tags out of the assistant history before they reach
+  // the model: replace bare <artifact/> placeholders with a first-person
+  // narration of the artifact, and strip trailing <affordance/> tags.
+  const modelMessages: IncomingMessage[] = messages.map((m) => {
+    if (m.role !== 'assistant' || typeof m.content !== 'string') return m
+    return { role: 'assistant', content: sanitizeAssistantTextForModel(m.content) }
+  })
 
   // 2. Stream the response. Meta first (arc-aware), then text deltas, then done.
   const stream = new ReadableStream<Uint8Array>({
@@ -209,12 +237,23 @@ export async function POST(req: Request) {
               model: AFFORDANCE_MODEL,
               max_tokens: 1024,
               system: affordanceSystemPrompt(concept),
-              messages,
+              messages: modelMessages,
             }
           : {
               model,
               max_tokens: 8096,
-              messages,
+              // When the chat history shows a rendered artifact, prime the
+              // model with a calibration block that (a) tells it the
+              // artifact is real, and (b) when an interaction summary is
+              // attached, lays out what she has actually done inside it.
+              ...(arcAlreadyResolved
+                ? {
+                    system: postArtifactSystemPrompt(
+                      artifactInteraction ?? null,
+                    ),
+                  }
+                : {}),
+              messages: modelMessages,
             }
       try {
         await withBackoff(

@@ -1,7 +1,7 @@
-'use client'
+"use client";
 
-import { use, useEffect, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import { use, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import {
   AssistantBody,
   ChatHeader,
@@ -9,14 +9,19 @@ import {
   InputBar,
   SparkIndicator,
   UserMessage,
-} from '@/components/chat'
-import { useChatStore } from '@/lib/chat-store'
-import { usePrototypeStore } from '@/lib/prototype-store'
-import { cn } from '@/lib/utils'
+} from "@/components/chat";
+import { useChatStore } from "@/lib/chat-store";
+import { usePrototypeStore } from "@/lib/prototype-store";
+import { buildInteractionSummary } from "@/lib/artifact-interaction";
+import { cn } from "@/lib/utils";
 
-export default function ChatView({ params }: { params: Promise<{ chatId: string }> }) {
-  const { chatId } = use(params)
-  const router = useRouter()
+export default function ChatView({
+  params,
+}: {
+  params: Promise<{ chatId: string }>;
+}) {
+  const { chatId } = use(params);
+  const router = useRouter();
   const {
     chats,
     models,
@@ -27,33 +32,40 @@ export default function ChatView({ params }: { params: Promise<{ chatId: string 
     streamingChatId,
     sendReply,
     stopStream,
-  } = useChatStore()
-  const { state } = usePrototypeStore()
-  const scrollRef = useRef<HTMLDivElement>(null)
+  } = useChatStore();
+  const { state, setCurrentChatId } = usePrototypeStore();
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  const chat = chats.find((c) => c.id === chatId)
-  const isStreaming = streamingChatId === chatId
-  const showInFlight = isStreaming && (thinking || streamBuffer)
-  const artifactMessageId = state.arc.artifactMessageId
+  const chat = chats.find((c) => c.id === chatId);
+  const isStreaming = streamingChatId === chatId;
+  const showInFlight = isStreaming && (thinking || streamBuffer);
+  const artifactMessageId = state.arc.artifactMessageId;
 
-  const messageCount = chat?.messages.length ?? 0
-  const lastRole = chat?.messages[chat.messages.length - 1]?.role
+  const messageCount = chat?.messages.length ?? 0;
+  const lastRole = chat?.messages[chat.messages.length - 1]?.role;
+
+  // Tell the prototype store which chat is currently being viewed so its
+  // derived `state.arc` resolves to this chat's arc, not whatever chat the
+  // user was looking at before.
+  useEffect(() => {
+    setCurrentChatId(chatId);
+  }, [chatId, setCurrentChatId]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [chatId])
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [chatId]);
 
   useEffect(() => {
-    if (lastRole === 'user') {
-      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+    if (lastRole === "user") {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
     }
-  }, [messageCount, lastRole])
+  }, [messageCount, lastRole]);
 
   useEffect(() => {
-    if (!chat) router.replace('/new')
-  }, [chat, router])
+    if (!chat) router.replace("/new");
+  }, [chat, router]);
 
-  if (!chat) return null
+  if (!chat) return null;
 
   return (
     <div className="flex h-full min-h-0 flex-1">
@@ -63,30 +75,30 @@ export default function ChatView({ params }: { params: Promise<{ chatId: string 
         <div ref={scrollRef} className="scroll-area flex-1 overflow-auto pt-6">
           <div className="mx-auto w-full max-w-[1024px] px-6 pb-6">
             {chat.messages.map((m) => {
-              if (m.role === 'user')
+              if (m.role === "user")
                 return (
                   <MessageRow key={m.id}>
                     <UserMessage text={m.text} attachments={m.attachments} />
                   </MessageRow>
-                )
-              const isArtifact = m.id === artifactMessageId
+                );
+              const isArtifact = m.id === artifactMessageId;
               return (
                 <MessageRow key={m.id} wide={isArtifact}>
                   <ClaudeMessage
                     id={`message-${m.id}`}
-                    className={isArtifact ? '!px-0' : undefined}
+                    className={isArtifact ? "!px-0" : undefined}
                   >
                     <AssistantBody text={m.text} />
                   </ClaudeMessage>
                 </MessageRow>
-              )
+              );
             })}
 
             {showInFlight && (
               <MessageRow>
                 <ClaudeMessage>
                   <AssistantBody text={streamBuffer} isStreaming />
-                  {!streamBuffer && <SparkIndicator working={thinking} />}
+                  <SparkIndicator working={thinking} />
                 </ClaudeMessage>
               </MessageRow>
             )}
@@ -101,7 +113,16 @@ export default function ChatView({ params }: { params: Promise<{ chatId: string 
               model={model}
               onModelChange={setModel}
               isStreaming={isStreaming}
-              onSend={(text, attachments) => sendReply(chatId, text, attachments)}
+              onSend={(text, attachments) => {
+                // If this chat has a live or just-resolved artifact, attach
+                // the current interaction summary so /api/chat can tell
+                // Claude what she predicted, what stage she's on, and what
+                // chips are currently visible.
+                const artifactInteraction = buildInteractionSummary(
+                  state.arc.artifact,
+                );
+                sendReply(chatId, text, attachments, { artifactInteraction });
+              }}
               onStop={stopStream}
             />
           </div>
@@ -112,7 +133,7 @@ export default function ChatView({ params }: { params: Promise<{ chatId: string 
         </div>
       </div>
     </div>
-  )
+  );
 }
 
 /**
@@ -124,17 +145,17 @@ function MessageRow({
   wide = false,
   children,
 }: {
-  wide?: boolean
-  children: React.ReactNode
+  wide?: boolean;
+  children: React.ReactNode;
 }) {
   return (
     <div
       className={cn(
-        'mx-auto w-full',
-        wide ? 'max-w-[1024px]' : 'max-w-[var(--content-max-width)]',
+        "mx-auto w-full",
+        wide ? "max-w-[1024px]" : "max-w-[var(--content-max-width)]",
       )}
     >
       {children}
     </div>
-  )
+  );
 }

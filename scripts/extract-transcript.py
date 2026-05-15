@@ -100,9 +100,24 @@ def render_assistant(msg: dict) -> list[str]:
     return out
 
 
+def list_conversations(src: Path) -> int:
+    data = json.loads(src.read_text())
+    print(f"{'idx':>4}  {'created':<19}  {'msgs':>5}  name")
+    print(f"{'-'*4}  {'-'*19}  {'-'*5}  {'-'*40}")
+    for i, conv in enumerate(data):
+        name = conv.get("name") or "(untitled)"
+        created = fmt_ts(conv.get("created_at"))
+        n = len(conv.get("chat_messages", []))
+        print(f"{i:>4}  {created:<19}  {n:>5}  {name}")
+    return 0
+
+
 def main() -> int:
+    if len(sys.argv) >= 3 and sys.argv[1] == "--list":
+        return list_conversations(Path(sys.argv[2]))
     if len(sys.argv) < 3:
         print("usage: extract-transcript.py <input.json> <index> [output.md]", file=sys.stderr)
+        print("       extract-transcript.py --list <input.json>", file=sys.stderr)
         return 2
     src = Path(sys.argv[1])
     idx = int(sys.argv[2])

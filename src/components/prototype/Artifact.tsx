@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion, type Variants } from 'motion/react'
 import {
   BookOpen,
@@ -17,7 +17,6 @@ import { cn } from '@/lib/utils'
 import {
   activeCue,
   bubblesForStage,
-  gateProgress,
   PREDICTION_1,
   PREDICTION_2,
   usePrototypeStore,
@@ -28,7 +27,8 @@ import {
 } from '@/lib/prototype-store'
 import {
   RESOURCES,
-  SUMMARY_CARD,
+  stepPosition,
+  TOTAL_STEPS,
   type Bubble,
   type PredictionOption,
   type Prediction1Key,
@@ -36,7 +36,7 @@ import {
 } from '@/lib/artifact-script'
 import { ControlChip, ControlPane } from './ControlPane'
 import {
-  LonePairSlider,
+  LonePairSelect,
   MoleculeScene,
   lpShapeLabel,
   moleculeNaturalLpCount,
@@ -48,33 +48,22 @@ import type { ImageAttachment } from '@/lib/types'
  * The inline artifact — the single core surface the prototype is built
  * around.
  *
- * v4 polish: the right pane became a state machine. At any moment it shows
- * exactly one of:
+ * The right pane is a state machine. At any moment it shows exactly one of:
  *   - Bubble state  (an active bubble, centered with breathing room)
  *   - Predict state (the prediction question + options + free-text)
  *   - Reveal state  (the first bubble of the reveal sequence, plus a
  *                    "You said" attribution chip)
- *   - Closing state (the closing bubble + summary card + resources + Done)
+ *   - Closing state (the closing bubble + resources + Done)
  *
- * Below it sits a persistent stepper: Back / position / Next. Guided
- * interaction beats add a gate-progress line above the stepper plus a
- * "Skip this and keep going" link after a 10s delay.
+ * Below it sits a persistent stepper: Back / position / Next. Next disables
+ * on the final beat — Done is the exit action there.
  *
- * The header carries only the title and a small button cluster (References,
- * Summary, Close). Both References and Summary open lightweight overlays
- * accessible at any time during the arc.
+ * The header carries only the title and a small button cluster (Attachments,
+ * Resources, Share, Fullscreen).
  */
 
-// Beats per stage are constant across all prediction branches: 5 + 1 + 3 + 1 + 2 + 1
-const TOTAL_BEATS = 13
-const STAGE_OFFSET: Record<ArtifactStage, number> = {
-  opening: 0,
-  'predict-1': 5,
-  'reveal-1': 6,
-  'predict-2': 9,
-  'reveal-2': 10,
-  closing: 12,
-}
+// Stepper math (TOTAL_STEPS, stepPosition) lives in artifact-script so the
+// summary Claude sees and the UI stepper stay in lockstep.
 
 // Right-pane carousel transition. `direction` is read off AnimatePresence's
 // custom prop so the outgoing step slides toward the side the new step came
@@ -100,18 +89,14 @@ const stepSlideVariants: Variants = {
   }),
 }
 
-function positionInArc(stage: ArtifactStage, bubbleIndex: number): number {
-  return STAGE_OFFSET[stage] + bubbleIndex + 1
-}
 
-type LiteracyPanel = 'lewis' | 'wedge' | 'geometry'
+type LiteracyPanel = 'lewis' | 'geometry'
 
 function panelDisplayLabel(panel: ArtifactState['activePanel']): string {
   if (panel === 'lewis') return 'Lewis'
-  if (panel === 'wedge') return 'Wedge-and-dash'
-  if (panel === 'geometry') return 'Geometry'
+  if (panel === 'geometry') return 'Molecular geometry'
   if (panel === 'materials') return 'Materials'
-  return 'None'
+  return 'Default'
 }
 
 export function Artifact() {
@@ -129,21 +114,31 @@ export function Artifact() {
   const artifact = arc.artifact
 
   const [referencesOpen, setReferencesOpen] = useState(false)
-  const [summaryOpen, setSummaryOpen] = useState(false)
   const [materialsOpen, setMaterialsOpen] = useState(false)
   const [expandedPanel, setExpandedPanel] = useState<LiteracyPanel | null>(null)
+  const [introStatementReady, setIntroStatementReady] = useState(false)
+  const [introStatementStreamed, setIntroStatementStreamed] = useState(false)
 
-  // Continuous lone-pair count drives the parameterized 5-domain morph. Lives
-  // here (not inside MoleculeScene) so the slider can sit next to the
-  // representation toggle group in the same container at the viewport edge.
-  const activeMolecule = artifact?.activeMolecule
-  const [lpCount, setLpCount] = useState<number>(
-    activeMolecule ? moleculeNaturalLpCount(activeMolecule) : 3,
-  )
-  const [trackedMolecule, setTrackedMolecule] = useState(activeMolecule)
-  if (activeMolecule && activeMolecule !== trackedMolecule) {
-    setTrackedMolecule(activeMolecule)
-    setLpCount(moleculeNaturalLpCount(activeMolecule))
+  const handleMoleculeEntranceStart = useCallback(() => {
+    setIntroStatementReady(true)
+  }, [])
+
+  const handleIntroStatementDone = useCallback(() => {
+    setIntroStatementStreamed(true)
+  }, [])
+
+  // Row-example mode (5-domain row chip). null = inactive: scene renders the
+  // scripted molecule at its natural LP count. Integer 0..3 = active: scene
+  // renders the matching real example (0→PF5, 1→SF4, 2→ClF3, 3→XeF2).
+  // The chip itself is hidden outside reveal-2 / closing.
+  const [rowLpCount, setRowLpCount] = useState<number | null>(null)
+  const [trackedStage, setTrackedStage] = useState(artifact?.stage)
+  if (artifact && artifact.stage !== trackedStage) {
+    setTrackedStage(artifact.stage)
+    // Entering reveal-2 auto-opens the row at ClF3. Anywhere else: deactivate.
+    // Closing keeps the chip visible but defaults the scene back to the
+    // scripted XeF2.
+    setRowLpCount(artifact.stage === 'reveal-2' ? 2 : null)
   }
 
   // Reset expansion whenever the active panel changes underneath (panel
@@ -158,7 +153,6 @@ export function Artifact() {
       expandedPanel &&
       (artifact?.activePanel !== expandedPanel ||
         (artifact?.activePanel !== 'lewis' &&
-          artifact?.activePanel !== 'wedge' &&
           artifact?.activePanel !== 'geometry'))
     ) {
       setExpandedPanel(null)
@@ -166,17 +160,16 @@ export function Artifact() {
   }
 
   useEffect(() => {
-    if (!referencesOpen && !summaryOpen && !materialsOpen) return
+    if (!referencesOpen && !materialsOpen) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setReferencesOpen(false)
-        setSummaryOpen(false)
         setMaterialsOpen(false)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [referencesOpen, summaryOpen, materialsOpen])
+  }, [referencesOpen, materialsOpen])
 
   if (!artifact || arc.beat === 'idle') {
     return <ArtifactCollapsed />
@@ -186,7 +179,6 @@ export function Artifact() {
   // freeze the artifact at the closing state — it stays viewable as a
   // record of what just happened.
   const interactive = arc.beat === 'artifact-active' || arc.beat === 'artifact-resolved'
-  const summaryAvailable = artifact.prediction1 !== null
 
   return (
     <section
@@ -206,13 +198,15 @@ export function Artifact() {
           molecule={artifact.activeMolecule}
           chipState={artifact.chipState}
           activePanel={artifact.activePanel}
-          lpCount={lpCount}
+          lpCount={rowLpCount ?? moleculeNaturalLpCount(artifact.activeMolecule)}
+          rowExampleActive={rowLpCount !== null}
           onRotationDelta={addRotation}
           onExitTreatment={
             artifact.activePanel ? () => clickPanel(artifact.activePanel!) : undefined
           }
+          onEntranceStart={handleMoleculeEntranceStart}
           topOverlayInsetPx={64}
-          rightOverlayInsetPx={344}
+          rightOverlayInsetPx={376}
           bottomOverlayInsetPx={64}
           className="absolute inset-0"
         />
@@ -220,7 +214,6 @@ export function Artifact() {
         <Header
           title="Why XeF₂ is linear"
           attachments={artifact.userAttachments}
-          cuePulse={activeCue(artifact) === 'panel-materials'}
           onOpenMaterials={() => setMaterialsOpen(true)}
           onReferences={() => setReferencesOpen(true)}
         />
@@ -228,11 +221,11 @@ export function Artifact() {
         <ViewportCue artifact={artifact} />
 
         {/* Bottom-of-viewport control pane. Each chip surfaces a label +
-            current value and reveals the actual control on hover. The
-            container is positioned to stop short of the floating right pane
-            so popovers don't slip behind it. The lone-pair chip is hidden
-            for the axial-strain preset (non-equilibrium configuration the
-            parameterized builder can't reproduce). */}
+            current value; click opens the actual control above. Positioned
+            to stop short of the floating right pane so popovers don't slip
+            behind it. The 5-domain row chip appears only after the ClF3
+            reveal — opening, predict-1, reveal-1, and predict-2 hide it so
+            the learner isn't offered the answer before the prediction. */}
         <ControlPane className="absolute bottom-3 left-3 z-10">
           <ControlChip
             label="View"
@@ -241,12 +234,16 @@ export function Artifact() {
           >
             <RepresentationPanels />
           </ControlChip>
-          {artifact.activeMolecule !== 'xef2-axial-strain' && (
+          {(artifact.stage === 'reveal-2' || artifact.stage === 'closing') && (
             <ControlChip
-              label="Lone pairs"
-              value={`${lpCount.toFixed(1)} · ${lpShapeLabel(lpCount)}`}
+              label="5-domain row"
+              value={rowLpCount === null ? 'Try one' : lpShapeLabel(rowLpCount)}
+              popoverClassName="rounded-lg p-1"
             >
-              <LonePairSlider value={lpCount} onChange={setLpCount} />
+              <LonePairSelect
+                value={rowLpCount ?? 3}
+                onChange={(v) => setRowLpCount(v)}
+              />
             </ControlChip>
           )}
         </ControlPane>
@@ -254,14 +251,16 @@ export function Artifact() {
         {/* Right pane as a translucent panel on top of the visualization. */}
         <aside
           className={cn(
-            'absolute bottom-3 right-3 top-[60px] z-10 flex w-[324px] flex-col',
-            'bg-page/97 border-border-subtle overflow-hidden rounded-md border',
+            'absolute bottom-3 right-3 top-[60px] z-10 flex w-[356px] flex-col',
+            'bg-surface-dim/97 border-border-subtle overflow-hidden rounded-md border',
             'backdrop-blur-md',
           )}
         >
           <RightPane
             artifact={artifact}
             interactive={interactive}
+            introStatementReady={introStatementReady}
+            introStatementStreamed={introStatementStreamed}
             expandedPanel={expandedPanel}
             onExpandPanel={setExpandedPanel}
             onAdvance={advanceArtifact}
@@ -269,13 +268,13 @@ export function Artifact() {
             onSubmitPrediction1={recordPrediction1}
             onSubmitPrediction2={recordPrediction2}
             onClose={closeArtifact}
-            onOpenSummary={() => setSummaryOpen(true)}
             onOpenReferences={() => setReferencesOpen(true)}
+            onIntroStatementDone={handleIntroStatementDone}
           />
           {/* Expanded-diagram clone overlays the entire right-pane card —
-              including the stepper / gate footer — via motion's layoutId
-              animation. The thumbnail inside the bubble stays in flow with
-              opacity 0 so content position never shifts. */}
+              including the stepper footer — via motion's layoutId animation.
+              The thumbnail inside the bubble stays in flow with opacity 0 so
+              content position never shifts. */}
           <AnimatePresence>
             {expandedPanel && (
               <motion.div
@@ -305,11 +304,7 @@ export function Artifact() {
                   expanded
                 />
                 <figcaption className="text-text-tertiary font-serif text-[14px] italic">
-                  {expandedPanel === 'lewis'
-                    ? 'Lewis structure'
-                    : expandedPanel === 'wedge'
-                      ? 'Wedge-and-dash'
-                      : 'Geometry chart'}
+                  {expandedPanel === 'lewis' ? 'Lewis structure' : 'Molecular geometry'}
                 </figcaption>
               </motion.div>
             )}
@@ -318,9 +313,6 @@ export function Artifact() {
       </div>
 
       {referencesOpen && <ReferencesOverlay onClose={() => setReferencesOpen(false)} />}
-      {summaryOpen && summaryAvailable && (
-        <SummaryOverlay onClose={() => setSummaryOpen(false)} />
-      )}
       {materialsOpen && (
         <MaterialsLightbox
           attachments={artifact.userAttachments}
@@ -338,13 +330,11 @@ export function Artifact() {
 function Header({
   title,
   attachments,
-  cuePulse,
   onOpenMaterials,
   onReferences,
 }: {
   title: string
   attachments: ImageAttachment[]
-  cuePulse: boolean
   onOpenMaterials: () => void
   onReferences: () => void
 }) {
@@ -360,7 +350,6 @@ function Header({
       <div className="flex items-center gap-2">
         <MaterialsHeaderStack
           attachments={attachments}
-          cuePulse={cuePulse}
           onClick={onOpenMaterials}
         />
         <div className="flex items-center gap-1">
@@ -382,16 +371,13 @@ function Header({
 /**
  * Stacked-paper thumbnail control in the artifact header. Three thumbnails
  * max, fanned out with small rotations so the stack reads as "papers". The
- * whole control opens the materials lightbox. Pulses when the bubble script
- * broadcasts the 'panel-materials' cue (e.g. opening beat 1).
+ * whole control opens the materials lightbox.
  */
 function MaterialsHeaderStack({
   attachments,
-  cuePulse,
   onClick,
 }: {
   attachments: ImageAttachment[]
-  cuePulse: boolean
   onClick: () => void
 }) {
   if (attachments.length === 0) return null
@@ -453,12 +439,6 @@ function MaterialsHeaderStack({
       <span className="text-text-secondary group-hover:text-text-primary text-[12px] font-medium">
         Attachments
       </span>
-      {cuePulse && (
-        <span
-          aria-hidden
-          className="border-accent/40 bg-accent/8 pointer-events-none absolute -inset-0.5 -z-10 animate-[cuePulse_1600ms_ease-in-out_infinite] rounded-md border"
-        />
-      )}
     </motion.button>
   )
 }
@@ -526,20 +506,24 @@ function HeaderLabeledButton({
 type RightPaneProps = {
   artifact: ArtifactState
   interactive: boolean
+  introStatementReady: boolean
+  introStatementStreamed: boolean
   expandedPanel: LiteracyPanel | null
   onExpandPanel: (panel: LiteracyPanel | null) => void
-  onAdvance: (opts?: { force?: boolean }) => void
+  onAdvance: () => void
   onRetreat: () => void
   onSubmitPrediction1: (input: { optionId?: Prediction1Key; freeText?: string }) => void
   onSubmitPrediction2: (input: { optionId?: Prediction2Key; freeText?: string }) => void
   onClose: () => void
-  onOpenSummary: () => void
   onOpenReferences: () => void
+  onIntroStatementDone: () => void
 }
 
 function RightPane({
   artifact,
   interactive,
+  introStatementReady,
+  introStatementStreamed,
   expandedPanel,
   onExpandPanel,
   onAdvance,
@@ -547,8 +531,8 @@ function RightPane({
   onSubmitPrediction1,
   onSubmitPrediction2,
   onClose,
-  onOpenSummary,
   onOpenReferences,
+  onIntroStatementDone,
 }: RightPaneProps) {
   const bubbles = bubblesForStage(artifact.stage, artifact.prediction1, artifact.prediction2)
   const currentBubble = bubbles[artifact.bubbleIndex] ?? null
@@ -556,15 +540,11 @@ function RightPane({
   const isReveal = artifact.stage === 'reveal-1' || artifact.stage === 'reveal-2'
   const isClosing = artifact.stage === 'closing'
   const isRevealHead = isReveal && artifact.bubbleIndex === 0
-  const gate = gateProgress(currentBubble, artifact)
-  const gateSatisfied = !gate || gate.satisfied
 
   // State key drives the in-pane fade transition.
   const stateKey = `${artifact.stage}:${artifact.bubbleIndex}`
 
-  const position = isPredict
-    ? STAGE_OFFSET[artifact.stage] + 1
-    : positionInArc(artifact.stage, artifact.bubbleIndex)
+  const position = stepPosition(artifact.stage, artifact.bubbleIndex)
 
   const canRetreat = !(artifact.stage === 'opening' && artifact.bubbleIndex === 0)
 
@@ -579,15 +559,15 @@ function RightPane({
     setPrevPosition(position)
   }
 
+  const isFinalBeat = isClosing
+  const canAdvance = interactive && !isPredict && !!currentBubble && !isFinalBeat
+
   return (
-    <div className="relative h-full">
-      {/* State content. Each step is its own motion.div absolutely positioned
-          inside this relative wrapper so the outgoing and incoming steps can
-          overlap during the transition. The inner scroll container handles
-          vertical overflow when a step's content is taller than the pane,
-          and carries extra bottom padding so content fades behind the
-          gradient footer rather than colliding with it. */}
-      <div className="relative h-full overflow-hidden">
+    // Stacked flex: content area is min-h-0 flex-1 overflow-y-auto, footer
+    // is shrink-0. The previous absolute gradient overlay covered the
+    // closing CTAs and forced users to scroll to reach Done.
+    <div className="flex h-full flex-col">
+      <div className="relative min-h-0 flex-1 overflow-hidden">
         <AnimatePresence initial={false} custom={direction} mode="popLayout">
           <motion.div
             key={stateKey}
@@ -602,48 +582,42 @@ function RightPane({
             }}
             className="no-scrollbar absolute inset-0 overflow-y-auto"
           >
-            <div className="flex min-h-full flex-col justify-center px-4 pb-24 pt-5">
+            <div
+              className={cn(
+                'flex min-h-full flex-col gap-3 px-4 pb-4 pt-5',
+                // Tall content (closing) anchors to the top so its CTAs sit
+                // just above the stepper; short single-bubble states center
+                // so the prose has breathing room.
+                isClosing || isPredict ? 'justify-start' : 'justify-center',
+              )}
+            >
               <StateContent
                 artifact={artifact}
                 currentBubble={currentBubble}
                 isPredict={isPredict}
                 isRevealHead={isRevealHead}
                 isClosing={isClosing}
+                introStatementReady={introStatementReady}
+                introStatementStreamed={introStatementStreamed}
                 interactive={interactive}
                 expandedPanel={expandedPanel}
                 onExpandPanel={onExpandPanel}
                 onSubmitPrediction1={onSubmitPrediction1}
                 onSubmitPrediction2={onSubmitPrediction2}
                 onClose={onClose}
-                onOpenSummary={onOpenSummary}
                 onOpenReferences={onOpenReferences}
+                onIntroStatementDone={onIntroStatementDone}
               />
             </div>
           </motion.div>
         </AnimatePresence>
       </div>
-
-      {/* Footer overlay. A bottom-anchored linear gradient (solid surface at
-          the bottom, transparent at the top) lets the scrolling content fade
-          out behind the gate/stepper instead of hitting a hard divider. */}
-      <div
-        aria-hidden
-        className="from-page pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-50% to-transparent"
-      />
-      <div className="absolute inset-x-0 bottom-0">
-        {gate && !gate.satisfied && (
-          <div className="text-text-tertiary px-4 py-2 text-[11px]">
-            <GateIndicator
-              label={gate.label}
-              onSkip={interactive ? () => onAdvance({ force: true }) : undefined}
-            />
-          </div>
-        )}
+      <div className="border-border-subtle shrink-0 border-t">
         <Stepper
           canRetreat={canRetreat && interactive}
-          canAdvance={interactive && !isPredict && !!currentBubble && gateSatisfied}
+          canAdvance={canAdvance}
           position={position}
-          total={TOTAL_BEATS}
+          total={TOTAL_STEPS}
           onRetreat={onRetreat}
           onAdvance={onAdvance}
         />
@@ -662,35 +636,38 @@ function StateContent({
   isPredict,
   isRevealHead,
   isClosing,
+  introStatementReady,
+  introStatementStreamed,
   interactive,
   expandedPanel,
   onExpandPanel,
   onSubmitPrediction1,
   onSubmitPrediction2,
   onClose,
-  onOpenSummary,
   onOpenReferences,
+  onIntroStatementDone,
 }: {
   artifact: ArtifactState
   currentBubble: Bubble | null
   isPredict: boolean
   isRevealHead: boolean
   isClosing: boolean
+  introStatementReady: boolean
+  introStatementStreamed: boolean
   interactive: boolean
   expandedPanel: LiteracyPanel | null
   onExpandPanel: (panel: LiteracyPanel | null) => void
   onSubmitPrediction1: (input: { optionId?: Prediction1Key; freeText?: string }) => void
   onSubmitPrediction2: (input: { optionId?: Prediction2Key; freeText?: string }) => void
   onClose: () => void
-  onOpenSummary: () => void
   onOpenReferences: () => void
+  onIntroStatementDone: () => void
 }) {
   if (isPredict) {
     return (
       <div className="flex h-full flex-col gap-4">
         {artifact.stage === 'predict-1' && (
           <PredictPanel<Prediction1Key>
-            label="Your read"
             framing={PREDICTION_1.framing}
             options={PREDICTION_1.options}
             onSubmit={interactive ? onSubmitPrediction1 : () => {}}
@@ -699,7 +676,6 @@ function StateContent({
         )}
         {artifact.stage === 'predict-2' && (
           <PredictPanel<Prediction2Key>
-            label="One more"
             framing={PREDICTION_2.framing}
             options={PREDICTION_2.options}
             onSubmit={interactive ? onSubmitPrediction2 : () => {}}
@@ -712,43 +688,39 @@ function StateContent({
 
   if (isClosing) {
     return (
-      <div className="flex flex-col gap-4">
+      // Bubble scrolls under the sticky CTA stack — Resources and Done stay
+      // anchored at the bottom of the visible pane regardless of bubble
+      // height. Without this, long closing copy at constrained viewports
+      // (e.g. /artifact-debug) pushed Done out of view.
+      <div className="flex flex-1 flex-col gap-4">
         {currentBubble && <BubbleCard text={currentBubble.text} />}
-        <button
-          type="button"
-          onClick={onOpenSummary}
-          className={cn(
-            'border-accent/30 bg-accent/5 hover:bg-accent/10 hover:border-accent/40',
-            'text-accent-strong rounded-md border px-3 py-2 text-left text-[12px] font-medium',
-            'transition-colors',
-          )}
-        >
-          View takeaway card →
-        </button>
-        <button
-          type="button"
-          onClick={onOpenReferences}
-          className={cn(
-            'border-border-subtle bg-page hover:bg-state-hover',
-            'text-text-secondary rounded-md border px-3 py-2 text-left text-[12px]',
-            'transition-colors',
-          )}
-        >
-          Go deeper — external resources →
-        </button>
-        {interactive && (
+        <div className="bg-page sticky bottom-0 -mx-1 mt-auto flex flex-col gap-1 px-1 pb-1 pt-2">
           <button
             type="button"
-            onClick={onClose}
+            onClick={onOpenReferences}
             className={cn(
-              'border-accent/40 bg-accent/10 hover:bg-accent/15',
-              'text-accent-strong rounded-md border px-3 py-2 text-[12px] font-medium',
-              'mt-1 transition-colors',
+              'border-border-subtle bg-page hover:bg-state-hover',
+              'text-text-secondary rounded-md border px-3 py-2 text-left text-[12px]',
+              'inline-flex items-center gap-2 transition-colors',
             )}
           >
-            Done — back to the conversation
+            <BookOpen className="size-3.5 shrink-0" />
+            Some more resources to check out
           </button>
-        )}
+          {interactive && (
+            <button
+              type="button"
+              onClick={onClose}
+              className={cn(
+                'bg-[#cc785c] hover:bg-[#b86749]',
+                'rounded-md px-3 py-2 text-[12px] font-medium text-white',
+                'transition-colors',
+              )}
+            >
+              Done — back to the conversation
+            </button>
+          )}
+        </div>
       </div>
     )
   }
@@ -758,12 +730,18 @@ function StateContent({
   // literacy panel (Lewis / Wedge / Geometry) is active, surface its 2D
   // diagram inline above the bubble: the 3D viewport shows the matching
   // treatment, and the right pane shows the literal 2D representation.
+  //
+  // Reveal-head suppresses the inline diagram because the attribution chip
+  // already sits above the bubble there; squeezing a thumbnail between the
+  // user's prediction and the model's response breaks the conversational
+  // back-and-forth read.
   const literacyPanel =
-    artifact.activePanel === 'lewis' ||
-    artifact.activePanel === 'wedge' ||
-    artifact.activePanel === 'geometry'
+    !isRevealHead &&
+    (artifact.activePanel === 'lewis' || artifact.activePanel === 'geometry')
       ? artifact.activePanel
       : null
+  const shouldStreamIntro =
+    artifact.stage === 'opening' && artifact.bubbleIndex === 0 && !introStatementStreamed
 
   return (
     <div className="flex flex-col gap-3">
@@ -785,7 +763,14 @@ function StateContent({
           />
         )}
       </AnimatePresence>
-      {currentBubble && <BubbleCard text={currentBubble.text} />}
+      {currentBubble && (
+        <BubbleCard
+          text={currentBubble.text}
+          stream={shouldStreamIntro}
+          streamReady={introStatementReady}
+          onStreamComplete={onIntroStatementDone}
+        />
+      )}
     </div>
   )
 }
@@ -801,8 +786,7 @@ function PanelDiagramInline({
   isExpanded: boolean
   onExpand: () => void
 }) {
-  const label =
-    panel === 'lewis' ? 'Lewis structure' : panel === 'wedge' ? 'Wedge-and-dash' : 'Geometry chart'
+  const label = panel === 'lewis' ? 'Lewis structure' : 'Molecular geometry'
   // The thumbnail stays in flow at all times (so the bubble underneath
   // doesn't shift when the user expands). Its `layoutId` is shared with the
   // expanded clone overlay rendered up at the aside level — motion uses that
@@ -842,10 +826,97 @@ function PanelDiagramInline({
   )
 }
 
-function BubbleCard({ text }: { text: string }) {
+function BubbleCard({
+  text,
+  stream = false,
+  streamReady = true,
+  onStreamComplete,
+}: {
+  text: string
+  stream?: boolean
+  streamReady?: boolean
+  onStreamComplete?: () => void
+}) {
+  if (stream && !streamReady) return <BubbleText text="" />
+  if (stream) return <StreamingBubbleText text={text} onComplete={onStreamComplete} />
+  return <BubbleText text={text} />
+}
+
+function BubbleText({ text }: { text: string }) {
   return (
-    <p className="text-text-primary font-serif text-[17px] leading-relaxed">{text}</p>
+    <p className="text-text-primary font-serif text-[17px] leading-relaxed">
+      {highlightKeywords(text)}
+    </p>
   )
+}
+
+function StreamingBubbleText({
+  text,
+  onComplete,
+}: {
+  text: string
+  onComplete?: () => void
+}) {
+  const [visibleText, setVisibleText] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    let timeoutId: number | null = null
+    let index = 0
+
+    const tick = () => {
+      if (cancelled) return
+      index += 1
+      setVisibleText(text.slice(0, index))
+      if (index >= text.length) {
+        onComplete?.()
+        return
+      }
+      timeoutId = window.setTimeout(tick, 8)
+    }
+
+    timeoutId = window.setTimeout(tick, 60)
+
+    return () => {
+      cancelled = true
+      if (timeoutId !== null) window.clearTimeout(timeoutId)
+    }
+  }, [text, onComplete])
+
+  return <BubbleText text={visibleText} />
+}
+
+// Keyword classes use a light bg tint of the matching legend color so the
+// element reference reads the same in the prose as it does in the 3D scene.
+// Text color stays primary for accessibility — only the background is tinted.
+const KEYWORD_REGEX = /\b(Xenon|Xe|Fluorine|F|lone pairs?)\b/g
+
+function keywordClass(token: string): string {
+  const t = token.toLowerCase()
+  if (t === 'xe' || t === 'xenon') return 'bg-[#8b6dd5]/20'
+  if (t === 'f' || t === 'fluorine') return 'bg-[#b8c75c]/35'
+  return 'bg-[#14b8a6]/20'
+}
+
+function highlightKeywords(text: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = []
+  let last = 0
+  let match: RegExpExecArray | null
+  KEYWORD_REGEX.lastIndex = 0
+  while ((match = KEYWORD_REGEX.exec(text)) !== null) {
+    if (match.index > last) nodes.push(text.slice(last, match.index))
+    nodes.push(
+      <span
+        key={`${match.index}-${match[0]}`}
+        className={cn('-mx-1 rounded-sm px-1', keywordClass(match[0]))}
+      >
+        {match[0]}
+      </span>,
+    )
+    last = KEYWORD_REGEX.lastIndex
+  }
+  if (last < text.length) nodes.push(text.slice(last))
+  return nodes
 }
 
 function RevealAttribution({
@@ -883,13 +954,11 @@ function lookupLabel2(p: ArtifactPrediction2 | null): string | undefined {
 // ---------------------------------------------------------------------------
 
 function PredictPanel<K extends string>({
-  label,
   framing,
   options,
   onSubmit,
   disabled,
 }: {
-  label: string
   framing: string
   options: PredictionOption<K>[]
   onSubmit: (input: { optionId?: K; freeText?: string }) => void
@@ -905,42 +974,38 @@ function PredictPanel<K extends string>({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="text-text-tertiary text-[10px] font-medium uppercase tracking-wide">
-        {label}
-      </div>
-      <p className="text-text-primary text-[15px] leading-relaxed">{framing}</p>
-
-      <div className="mt-1 flex flex-col gap-2">
-        {options.map((opt, idx) => (
-          <button
-            key={opt.id}
-            type="button"
-            disabled={disabled}
-            onClick={() => onSubmit({ optionId: opt.id })}
-            className={cn(
-              'border-border-subtle hover:bg-state-hover hover:border-accent/40',
-              'text-text-primary font-text rounded-md border bg-surface',
-              'flex items-start gap-2.5 px-3 py-2.5 text-left text-[13px] leading-snug',
-              'cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-            )}
-          >
-            <span
-              className={cn(
-                'bg-state-pill text-text-secondary mt-0.5 inline-flex h-5 w-5 shrink-0',
-                'items-center justify-center rounded-full text-[10px] font-medium',
-              )}
-            >
-              {idx + 1}
-            </span>
-            <span className="flex-1">{opt.label}</span>
-          </button>
-        ))}
-      </div>
+      <p className="text-text-primary font-serif text-[17px] leading-relaxed">{framing}</p>
 
       <div className="mt-1 flex flex-col gap-1">
-        <span className="text-text-tertiary text-[10px] uppercase tracking-wide">
-          Or in your own words
-        </span>
+        <div className="border-border-subtle bg-surface flex flex-col overflow-hidden rounded-md border">
+          {options.map((opt, idx) => (
+            <button
+              key={opt.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => onSubmit({ optionId: opt.id })}
+              className={cn(
+                'group text-text-primary font-text relative',
+                idx > 0 && 'border-border-subtle border-t',
+                'first:rounded-t-md last:rounded-b-md',
+                'flex items-start gap-2.5 px-3 py-2.5 text-left text-[13px] leading-snug',
+                'cursor-pointer disabled:cursor-not-allowed disabled:opacity-50',
+                'hover:bg-accent/8 hover:text-accent-strong hover:ring-1 hover:ring-inset hover:ring-accent/25',
+              )}
+            >
+              <span
+                className={cn(
+                  'bg-state-pill text-text-secondary mt-0.5 inline-flex h-5 w-5 shrink-0',
+                  'items-center justify-center rounded-full text-[10px] font-medium',
+                  'group-hover:bg-accent/15 group-hover:text-accent-strong',
+                )}
+              >
+                {idx + 1}
+              </span>
+              <span className="flex-1">{opt.label}</span>
+            </button>
+          ))}
+        </div>
         <textarea
           value={freeText}
           disabled={disabled}
@@ -952,12 +1017,12 @@ function PredictPanel<K extends string>({
             }
           }}
           rows={2}
-          placeholder="Type a sentence and press Enter…"
+          placeholder="Or in your own words…"
           className={cn(
             'font-text text-text-primary placeholder:text-text-tertiary',
-            'border-border-subtle focus:border-accent/40 rounded-md border bg-surface',
-            'resize-none px-2.5 py-2 text-[12px] leading-snug outline-none',
-            'disabled:cursor-not-allowed disabled:opacity-50',
+            'border-border-subtle bg-surface rounded-md border',
+            'resize-none px-3 py-2.5 text-[13px] leading-snug outline-none',
+            'focus:border-accent/40 disabled:cursor-not-allowed disabled:opacity-50',
           )}
         />
       </div>
@@ -966,7 +1031,7 @@ function PredictPanel<K extends string>({
 }
 
 // ---------------------------------------------------------------------------
-// Stepper + gate indicator
+// Stepper
 // ---------------------------------------------------------------------------
 
 function Stepper({
@@ -982,7 +1047,7 @@ function Stepper({
   position: number
   total: number
   onRetreat: () => void
-  onAdvance: (opts?: { force?: boolean }) => void
+  onAdvance: () => void
 }) {
   return (
     <div className="flex items-center justify-between px-4 py-3">
@@ -1013,45 +1078,6 @@ function Stepper({
         Next
         <ChevronRight className="size-3.5" />
       </button>
-    </div>
-  )
-}
-
-function GateIndicator({
-  label,
-  onSkip,
-}: {
-  label: string
-  onSkip?: () => void
-}) {
-  const [showSkip, setShowSkip] = useState(false)
-  // Reset the 10s skip timer whenever the gate label changes. Tracked-prop
-  // derived-state pattern keeps the reset in render rather than in an effect.
-  const [prevLabel, setPrevLabel] = useState(label)
-  if (label !== prevLabel) {
-    setPrevLabel(label)
-    setShowSkip(false)
-  }
-  useEffect(() => {
-    const id = window.setTimeout(() => setShowSkip(true), 10_000)
-    return () => window.clearTimeout(id)
-  }, [label])
-
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-accent-strong/85 inline-flex items-center gap-1.5">
-        <span aria-hidden className="bg-accent-strong/70 inline-block size-1.5 rounded-full" />
-        {label}
-      </span>
-      {showSkip && onSkip && (
-        <button
-          type="button"
-          onClick={onSkip}
-          className="text-text-tertiary hover:text-text-secondary underline-offset-2 hover:underline"
-        >
-          Skip this and keep going
-        </button>
-      )}
     </div>
   )
 }
@@ -1115,29 +1141,6 @@ function ReferencesOverlay({ onClose }: { onClose: () => void }) {
           </li>
         ))}
       </ul>
-    </OverlayShell>
-  )
-}
-
-function SummaryOverlay({ onClose }: { onClose: () => void }) {
-  return (
-    <OverlayShell title="Takeaway" onClose={onClose}>
-      <div className="border-accent/30 bg-accent/5 flex flex-col gap-2 rounded-md border p-3.5">
-        <div className="text-accent-strong text-[10px] font-medium uppercase tracking-wide">
-          {SUMMARY_CARD.title}
-        </div>
-        <ul className="flex flex-col gap-2">
-          {SUMMARY_CARD.lines.map((line, i) => (
-            <li
-              key={i}
-              className="text-text-secondary flex items-start gap-2 text-[13px] leading-snug"
-            >
-              <span className="bg-accent-strong/70 mt-1.5 inline-block size-1 shrink-0 rounded-full" />
-              <span>{line}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
     </OverlayShell>
   )
 }

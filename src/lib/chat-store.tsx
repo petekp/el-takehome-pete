@@ -20,6 +20,16 @@ import {
   type StreamChatResult,
 } from './api'
 import { clientMatchTrigger, getConcept } from './concepts'
+import type { ArtifactInteractionSummary } from './artifact-interaction'
+
+/**
+ * Optional per-request context the chat page can attach to sendReply. Lets
+ * the UI thread artifact-interaction state into /api/chat without the chat
+ * store itself needing to know what an artifact is.
+ */
+export type ChatRequestExtras = {
+  artifactInteraction?: ArtifactInteractionSummary | null
+}
 
 export type StreamRequest = {
   endpoint: string
@@ -62,7 +72,12 @@ type ChatStore = {
   /** Most recent completion meta. PrototypeProvider observes this. */
   lastCompletion: LastCompletion | null
   createChat: (text: string, attachments?: ImageAttachment[]) => string
-  sendReply: (chatId: string, text: string, attachments?: ImageAttachment[]) => void
+  sendReply: (
+    chatId: string,
+    text: string,
+    attachments?: ImageAttachment[],
+    extras?: ChatRequestExtras,
+  ) => void
   /**
    * Append a static (non-streamed) assistant message to an existing chat.
    * Returns the new message id. Used by PrototypeProvider for stubbed beats
@@ -98,9 +113,14 @@ function nextId(prefix: 'c' | 'm') {
 }
 
 /**
- * Encode a user message for the Anthropic API. Text-only stays as a plain
+ * Encode a chat message for the Anthropic API. Text-only stays as a plain
  * string for the SDK's terse path; if attachments are present, switch to the
  * content-block array shape with one image block per attachment.
+ *
+ * UI-only tags (<artifact/>, <affordance/>) are sent through to the routes
+ * as-is — the API boundary sanitizes them so the server can also branch
+ * on their presence (e.g. suppress arc-firing when an artifact already
+ * resolved in this chat).
  */
 function encodeMessageForApi(m: Message): {
   role: 'user' | 'assistant'
@@ -244,7 +264,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   )
 
   const runChatCompletion = useCallback(
-    (chatId: string, history: Message[]) => {
+    (chatId: string, history: Message[], extras?: ChatRequestExtras) => {
       // Fire-and-forget: callers don't await; errors are logged in streamCompletion.
       // The trigger message is the most recently appended user message.
       const lastUser = history[history.length - 1]
@@ -256,6 +276,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           body: {
             model: model.id,
             messages: history.map(encodeMessageForApi),
+            ...(extras?.artifactInteraction
+              ? { artifactInteraction: extras.artifactInteraction }
+              : {}),
           },
         },
         { triggerMessageId },
@@ -312,7 +335,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   )
 
   const sendReply = useCallback(
-    (chatId: string, text: string, attachments?: ImageAttachment[]) => {
+    (
+      chatId: string,
+      text: string,
+      attachments?: ImageAttachment[],
+      extras?: ChatRequestExtras,
+    ) => {
       const userMsg: Message = {
         id: nextId('m'),
         role: 'user',
@@ -329,7 +357,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }),
       )
 
-      runChatCompletion(chatId, nextHistory)
+      runChatCompletion(chatId, nextHistory, extras)
     },
     [runChatCompletion],
   )

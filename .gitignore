@@ -9,6 +9,7 @@
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
+.worktrees
 
 # testing
 /coverage
@@ -40,3 +41,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# transcript bundle (private — emailed, not committed; repo is public)
+/transcripts-bundle/
+/transcripts-bundle.zip
+/docs/claude-conversations.json

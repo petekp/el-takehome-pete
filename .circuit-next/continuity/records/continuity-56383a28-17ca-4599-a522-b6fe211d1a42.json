@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "record_id": "continuity-56383a28-17ca-4599-a522-b6fe211d1a42",
+  "project_root": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main",
+  "created_at": "2026-05-15T02:51:59.794Z",
+  "git": {
+    "cwd": "/Users/petepetrash/Code/anthropic/education-labs-takehome-main"
+  },
+  "narrative": {
+    "goal": "Apply iterative UI/UX polish to the XeF2 artifact via Agentation MCP feedback",
+    "next": "Listen to the Agentation MCP for incoming annotations on the XeF2 artifact and address them iteratively",
+    "state_markdown": "- v5 trust pass complete: 14-priority brief executed end-to-end (Lewis overlap, 180° label, wedge removal, lone-pair color, Molecular geometry rename, right-pane overflow, gate removal, click-to-open View, beat compression 13→8, integer slider, personalized copy + free-text classifier).\n- Storage key bumped to `education-labs:prototype-state:v5-xef2-trust`; v4 marked stale.\n- `npm run build` + `npm run lint` both pass with only pre-existing Server Action warnings (onRotationDelta/onExitTreatment/onChange/onClose) and 4 unrelated `<img>` warnings.\n- Manually verified in browser at http://claude.localhost:1355/artifact-debug — opening copy, predict UI, closing CTAs, Lewis SVG, F-Xe-F=180° annotation, ClF3 dynamic label, integer slider snapping AX2E3↔AX2E3↔linear, all confirmed.\n- Lewis SVG XeF2: 3 LPs at (28,40)+(32,40), (28,32)+(32,32), (68,40)+(72,40) — no bond/atom/glyph overlap. ClF3: both LPs on bondless left at (28,32)+(32,32) and (28,48)+(32,48).\n- 180° annotation: dynamic text `${outer}–${central}–${outer} = ${angle}°` perpendicular to bond axis with subtle marker at central atom.\n- 5-domain row scrubber: `step={1}` integer-only, hidden during predict-1 and predict-2, label format `5-domain row · AXE · shape`.\n- Right pane restructured to flex-column — stepper sits below content, no gradient overlap.\n- `chipUpdatesForFocus` rewritten to flip both ON and OFF; advance/retreat/recordPrediction all clear `activePanel` to keep view in sync with bubble copy.\n- New Prediction1 keys: `counting`, `blocking`, `idk` with bespoke reveal copy from the brief.\n- `RepresentationPanelId` no longer includes `wedge`; treatment, SVG, helpers, debug-page list all cleaned up.\n- Dev server running on port 4001 (Next 16.1.6); tab proxied via `http://claude.localhost:1355`.",
+    "debt_markdown": "- Pre-existing Server Action lint warnings on `onRotationDelta` / `onExitTreatment` (MoleculeScene.tsx:490,494), `onChange` (LonePairSlider, MoleculeScene.tsx:1417), and `onClose` (MaterialsLightbox, RepresentationPanels.tsx:116) — Next 16 noise, functionally harmless.\n- `/artifact-debug` page custom store (artifact-debug/page.tsx:119–148) still has a stripped-down `advanceArtifact` that does not run `chipUpdatesForFocus` or clear `activePanel`. Production flow in `prototype-store.tsx` does both. Debug-page testing of beat-driven chip auto-flips is therefore inaccurate; verify via the real `/new` chat flow if needed.\n- ClF3 axial-axial angle still rendered as idealized 180° in 3D (real value ~175° due to lone-pair compression).\n- Three.js camera lerp still runs alongside OrbitControls.update — rotation during a treatment transition could feel jittery if the user drags mid-animation.\n- Fullscreen + Share header buttons still no-op stubs. Fullscreen intended to use `document.startViewTransition` eventually.\n- Local dir rename to `el-takehome-pete` still pending (dev server + TS server + agentation MCP holding paths).\n- Previous Agentation session id from v4 handoff: `mp5zqxhq-zj9x4x` (all annotations from that session resolved). A new session may be active for v5 testing.\n- `ToggleGroup` primitive (`src/components/ui/ToggleGroup.tsx`) is still unreferenced after the v4 View select-menu refactor — safe to delete in cleanup."
+  },
+  "continuity_kind": "standalone",
+  "resume_contract": {
+    "mode": "resume_standalone",
+    "auto_resume": false,
+    "requires_explicit_resume": true
+  }
+}

@@ -14,6 +14,10 @@
   /* Colors */
   --color-page: #faf9f5;
   --color-surface: #ffffff;
+  /* Slightly warm cream used as the floating-UI tone over the now-white
+     3D viewport. A very subtle warmth so the right-pane card lifts off the
+     white canvas without competing with it. */
+  --color-surface-dim: #fbfaf7;
   --color-user-bubble: rgb(240 238 230);
 
   --color-text-primary: rgb(20 20 19);

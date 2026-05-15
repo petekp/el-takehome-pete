@@ -10,15 +10,17 @@ import type { ImageAttachment } from '@/lib/types'
 
 export default function NewChat() {
   const { config, models, model, setModel, createChat } = useChatStore()
-  const { resetArc } = usePrototypeStore()
+  const { setCurrentChatId } = usePrototypeStore()
   const router = useRouter()
   const [initialAttachments, setInitialAttachments] = useState<ImageAttachment[]>([])
 
-  // Each fresh /new mount clears any prior arc state so the demo starts
-  // from a known idle position regardless of where the user navigated from.
+  // /new has no chat yet — clear the store's "current chat" pointer so the
+  // landing page doesn't read or mutate the arc of whatever chat the user
+  // just navigated away from. Per-chat arcs in localStorage are untouched,
+  // so revisiting an existing chat still surfaces its artifact.
   useEffect(() => {
-    resetArc()
-  }, [resetArc])
+    setCurrentChatId(null)
+  }, [setCurrentChatId])
 
   // Pre-fetch Naomi's two attachments (VSEPR chart + XeF2 Lewis) and seed
   // them into the composer. This is the demo's grounded-in-real-materials

@@ -1,30 +1,32 @@
 /**
  * Artifact script — the load-bearing piece of the prototype.
  *
- * After the XeF2 pivot, the artifact's job is to take Naomi's partial
- * understanding ("the lone pairs are blocking the bonds") and complete it
- * spatially: yes, the lone pairs are in the way, but specifically in the
- * equatorial plane of a trigonal bipyramid, leaving the two axial positions
- * for the F's — which is why the molecular geometry reads as LINEAR even
- * though the electron-domain geometry is TRIGONAL BIPYRAMIDAL.
+ * The artifact teaches three layers explicitly:
+ *   1. Lewis structure → counts of bonds and lone pairs.
+ *   2. VSEPR        → spatial arrangement of electron domains.
+ *   3. Molecular geometry → where the atoms sit.
  *
- * The arc walks her through:
- *   1. Open by naming her materials directly.
- *   2. Read the Lewis structure: 3 lone pairs on Xe, 2 F bonds.
- *   3. 3D reveal: lone pairs sit in the equatorial plane.
- *   4. Predict why (equatorial = more space) — branched reveal.
- *   5. Axial-strain demo for the "atoms-push-lone-pairs" misconception.
- *   6. Close on the 180° F-Xe-F angle, why linear.
- *   7. Predict the next case (2 lone pairs → T-shape, ClF3).
- *   8. Morph to ClF3.
- *   9. Closing summary that ties the whole row of the chart together.
- *   10. "Go deeper" external resources.
+ * After v4 polish + v5 trust pass, the arc takes the user's "blocking"
+ * mental model and bridges it to the spatial story: yes, the lone pairs
+ * are in the way, but specifically in the equatorial plane of a trigonal
+ * bipyramid, leaving the two axial positions for the F's — so the
+ * molecular geometry reads LINEAR even though the electron-domain
+ * geometry is TRIGONAL BIPYRAMIDAL.
+ *
+ * Compressed to 8 beats:
+ *   1. Open: name the user's blocking intuition.
+ *   2. 3D ground truth: XeF2 with lone pairs visible.
+ *   3. Predict 1: why are the lone pairs equatorial?
+ *   4. Reveal 1: bridge their answer → spatial rule.
+ *   5. Strain demo: drag a lone pair axial; feel resistance.
+ *   6. Predict 2: 5 domains, 2 lone pairs → what shape?
+ *   7. Reveal 2: T-shape + introduce the 5-domain row control.
+ *   8. Close: 3-layer synthesis + resources.
  *
  * Voice everywhere is a jovial knowledgeable friend who remembers what it
- * was like to take chemistry. Naomi's words ("blocking", "wedge and dash
- * is confusing") get echoed back early. No "chip" anywhere user-facing —
- * use positional language ("the Lone pairs toggle up top", "the button up
- * top"). No emoji, no exclamation points unless genuinely warranted.
+ * was like to take chemistry. Naomi's words ("blocking", "in the way") get
+ * echoed back early. No emoji, no exclamation points unless genuinely
+ * warranted.
  */
 
 /**
@@ -33,12 +35,10 @@
  *   xef2               — XeF2, trigonal bipyramidal EDG, 3 lone pairs
  *                        equatorial, 2 F axial, MG linear (180°).
  *   xef2-axial-strain  — Hypothetical "what if a lone pair were axial?"
- *                        configuration. Used in Beat 5 to demonstrate why
- *                        equatorial wins. One lone pair moved to +y axial,
- *                        the F that was there pushed equatorial.
+ *                        configuration. Used in the strain beat as a
+ *                        fallback if the user doesn't drag interactively.
  *   clf3               — ClF3, trigonal bipyramidal EDG, 2 lone pairs
  *                        equatorial, 1 F equatorial, 2 F axial, MG T-shape.
- *                        Used in Beat 8 as the morph target.
  */
 export type Molecule = 'xef2' | 'xef2-axial-strain' | 'clf3'
 
@@ -46,27 +46,23 @@ export type Molecule = 'xef2' | 'xef2-axial-strain' | 'clf3'
  * Focus states encode WHAT THE VIZ SHOULD BE EMPHASIZING at each bubble.
  *
  *   default                 — viewport idle, no emphasis.
- *   materials               — "Your materials" panel pulse; the user just
- *                             learned the artifact is grounded in her photos.
- *   lewis-isolation         — Beat 2: dim 3D + non-Lewis panels while the
- *                             user reads the Lewis structure.
- *   equatorial-reveal       — Beat 3: lone pairs in the equatorial plane
- *                             get a brief pulse; equatorial plane toggle on.
- *   predict-spatial         — Beat 4: waiting on her first prediction.
- *   axial-strain            — Beat 5 (option-3 path): swap to the strained
- *                             configuration so she can see how cramped axial
- *                             positions are.
- *   axial-bond-angle        — Beat 6: 180° angle toggle on, F-Xe-F line
- *                             highlighted.
- *   predict-tshape          — Beat 7: waiting on her T-shape prediction.
- *   clf3-tshape             — Beat 8: morph to ClF3, T-shape visible.
- *   closing                 — Beat 9: all panels equally lit, summary card
- *                             visible.
+ *   materials               — opening: pulse the "Your materials" header
+ *                             stack so the artifact reads as grounded in
+ *                             her photos.
+ *   equatorial-reveal       — show lone pairs in the equatorial plane
+ *                             prominently; equatorial plane disc on.
+ *   predict-spatial         — predict-1: lone pairs visible, neutral.
+ *   axial-strain            — strain demo; lone pairs visible, drag invited.
+ *   axial-bond-angle        — molecular geometry beat: angle indicator on,
+ *                             F-Xe-F line emphasized.
+ *   predict-tshape          — predict-2: row control hidden so the
+ *                             options don't reveal the answer.
+ *   clf3-tshape             — show ClF3 + reveal the 5-domain row control.
+ *   closing                 — close: synthesis card, all panels equal.
  */
 export type FocusState =
   | 'default'
   | 'materials'
-  | 'lewis-isolation'
   | 'equatorial-reveal'
   | 'predict-spatial'
   | 'axial-strain'
@@ -76,19 +72,32 @@ export type FocusState =
   | 'closing'
 
 /**
- * Misconception tags for prediction 1 (why are the lone pairs in the
- * equatorial plane?).
+ * Misconception tags for prediction 1 (why are the lone pairs equatorial?).
  *
  *   notational     — "The lone pairs were drawn that way; it's arbitrary."
- *                    Treats the spatial arrangement as a 2D convention.
- *   equatorial     — "Equatorial positions have more space (fewer 90°
- *                    neighbors)." The correct answer.
- *   atoms-push     — "The F atoms are bigger and push the lone pairs to the
- *                    equator." Inverts the actual relationship (lone pairs
- *                    push atoms because lone pairs need more space).
+ *                    Treats spatial arrangement as a 2D convention.
+ *   equatorial     — "Equatorial seats have more space (fewer 90°
+ *                    neighbors)." Correct.
+ *   atoms-push     — "The F atoms are bigger and push the lone pairs to
+ *                    the equator." Inverts the actual relationship.
+ *   counting       — Free text framed as octets / electron rules /
+ *                    stability / noble gas. They're answering the
+ *                    counting question (Lewis), not the spatial question.
+ *   blocking       — Free text echoes "blocking" or "in the way." The
+ *                    user's own intuition surfacing again — bridge it
+ *                    forward instead of correcting.
+ *   idk            — "I don't know" / "no idea" / similar. Skip the
+ *                    correction; just show.
  *   unclassified   — Free text we couldn't route.
  */
-export type Prediction1Key = 'notational' | 'equatorial' | 'atoms-push' | 'unclassified'
+export type Prediction1Key =
+  | 'notational'
+  | 'equatorial'
+  | 'atoms-push'
+  | 'counting'
+  | 'blocking'
+  | 'idk'
+  | 'unclassified'
 
 /**
  * Misconception tags for prediction 2 (5 domains, 2 lone pairs → what
@@ -116,19 +125,12 @@ export type PredictionOption<K extends string> = {
 export type ElementCue =
   | 'panel-materials'
   | 'panel-lewis'
-  | 'panel-wedge'
   | 'panel-geometry'
   | 'panels-row'
   | 'viewport'
   | 'lone-pairs-toggle'
   | 'bond-angles-toggle'
-
-/**
- * A guided-interaction beat blocks advance until the user satisfies a gate.
- *   panels-explored — user must click each of Lewis/Wedge/Geometry once.
- *   rotation        — user must rotate the 3D scene by at least 90°.
- */
-export type BubbleGate = 'panels-explored' | 'rotation'
+  | 'lp-row'
 
 export type Bubble = {
   text: string
@@ -138,8 +140,6 @@ export type Bubble = {
   focus?: FocusState
   /** Visual cue applied to a left-side element while this bubble is active. */
   cue?: ElementCue
-  /** Gate the user must satisfy before advancing. */
-  gate?: BubbleGate
 }
 
 export type ArtifactPath = {
@@ -151,47 +151,56 @@ export type ArtifactPath = {
 export type Resource = { title: string; url: string; source: string }
 
 // ---------------------------------------------------------------------------
-// Opening beats. Five bubbles before prediction 1 — two of them are guided
-// interactions (panels exploration + rotation gate).
+// Stepper position — shared between the UI (Artifact.tsx) and the
+// interaction summary so the user-facing "step X of Y" indicator and the
+// summary Claude sees stay in sync. 8 positions: 2 (opening) + 1 (predict-1)
+// + 2 (reveal-1) + 1 (predict-2) + 1 (reveal-2) + 1 (closing).
+// ---------------------------------------------------------------------------
+
+export const TOTAL_STEPS = 8
+
+const STAGE_STEP_OFFSET = {
+  opening: 0,
+  'predict-1': 2,
+  'reveal-1': 3,
+  'predict-2': 5,
+  'reveal-2': 6,
+  closing: 7,
+} as const
+
+/**
+ * 1-indexed step position the user sees in the stepper for the given
+ * stage + bubble index. Predict stages count as a single step regardless
+ * of bubbleIndex.
+ */
+export function stepPosition(
+  stage: keyof typeof STAGE_STEP_OFFSET,
+  bubbleIndex: number,
+): number {
+  if (stage === 'predict-1' || stage === 'predict-2') {
+    return STAGE_STEP_OFFSET[stage] + 1
+  }
+  return STAGE_STEP_OFFSET[stage] + bubbleIndex + 1
+}
+
+// ---------------------------------------------------------------------------
+// Opening beats — 2 bubbles before prediction 1.
 // ---------------------------------------------------------------------------
 
 export const OPENING_BUBBLES: Bubble[] = [
   {
     text:
-      "Okay. I'm looking at your chart and your Lewis structure on the right. The row you're on — 5 domains, 3 lone pairs — is one of the genuinely tricky cells, and it's tricky for a specific reason. The 2D drawings can't show you what the lone pairs are actually doing in 3D.",
+      "You said the three lone pairs are blocking any bonds from forming around Xe — and that intuition is partly right. The lone pairs are taking up space, and they restrict where the F atoms can go. But the 2D drawings can't show you how they're taking up space, which is why the linear shape feels arbitrary. Let me show you what's happening in 3D.",
     molecule: 'xef2',
     focus: 'materials',
     cue: 'panel-materials',
   },
   {
     text:
-      "Here's what your Lewis structure shows you: Xe in the middle, two F's bonded, three lone pairs on Xe. The drawing puts those lone pairs around Xe at what looks like roughly even spacing in the plane of the page. That's a 2D convention, not a spatial fact — and the Lewis can't show you what the 3D arrangement actually is.",
-    molecule: 'xef2',
-    focus: 'lewis-isolation',
-    cue: 'panel-lewis',
-  },
-  {
-    text:
-      "Click through each of the three panels below to see what each one captures.",
-    molecule: 'xef2',
-    focus: 'lewis-isolation',
-    cue: 'panels-row',
-    gate: 'panels-explored',
-  },
-  {
-    text:
-      "All three lone pairs sit in the equatorial plane, perpendicular to the F-Xe-F axis. That's why the F's end up axial, and why the molecule is linear.",
+      "Here's XeF2 in 3D. Two F atoms axial — top and bottom — and three lone pairs around Xe sitting perpendicular to them, in what's called the equatorial plane. Drag to rotate it.",
     molecule: 'xef2',
     focus: 'equatorial-reveal',
     cue: 'viewport',
-  },
-  {
-    text:
-      "Take a sec to rotate the molecule — you'll want to see how the lone pairs sit relative to the F atoms.",
-    molecule: 'xef2',
-    focus: 'equatorial-reveal',
-    cue: 'viewport',
-    gate: 'rotation',
   },
 ]
 
@@ -204,7 +213,7 @@ export const PREDICTION_1: {
   options: PredictionOption<Prediction1Key>[]
 } = {
   framing:
-    "Quick question. Why do you think the lone pairs ended up in the equatorial plane instead of, say, the axial positions where the F's are now?",
+    "Quick question. Why do you think the lone pairs ended up in the equatorial plane instead of the axial positions where the F's are now?",
   options: [
     {
       id: 'notational',
@@ -225,87 +234,96 @@ export const PREDICTION_1: {
 }
 
 // ---------------------------------------------------------------------------
-// Reveal 1 — branched per misconception.
-// Each branch ends by toggling the 180° bond angle and explaining linear MG.
+// Reveal 1 — branched per misconception. Two bubbles per branch:
+//   1. Bridge to spatial rule (varies per misconception).
+//   2. Strain demo — invite drag, explain in one short paragraph (shared).
 // ---------------------------------------------------------------------------
 
-const SHARED_BOND_ANGLE_BEAT: Bubble = {
+const STRAIN_BEAT_INVITE: Bubble = {
   text:
-    "Once the lone pairs claim the equatorial plane, the F's only have the axial positions left. Two axial positions opposite each other means the F-Xe-F angle is 180°. That's why the molecular geometry is linear, even though the electron-domain geometry is trigonal bipyramidal. The chart's not lying to you — it's just compressing this whole spatial story into one cell.",
+    "Try grabbing a lone pair and dragging it toward an axial position — where an F sits now. You'll feel the molecule resist. That resistance is the geometry: an axial seat has three neighbors at 90°, equatorial only has two. Lone pairs need elbow room, so they take the roomier seats and the F atoms get what's left over.",
   molecule: 'xef2',
-  focus: 'axial-bond-angle',
-  cue: 'bond-angles-toggle',
+  focus: 'axial-strain',
+  cue: 'viewport',
 }
 
 const NOTATIONAL_REVEAL_1: Bubble[] = [
   {
     text:
-      "The drawing doesn't tell you that, you're right — but the position isn't arbitrary. There's a real geometric reason. Want to feel it? Grab one of the lone pairs and try dragging it up to the axial position where an F currently sits. Watch the molecule resist.",
+      "The drawing doesn't tell you that, you're right — but the position isn't arbitrary. There's a real geometric reason hiding behind the 2D convention.",
     molecule: 'xef2',
     focus: 'equatorial-reveal',
-    cue: 'viewport',
   },
-  {
-    text:
-      "An axial lone pair has three other groups at 90°. Axial positions are cramped. Equatorial positions only have two 90° neighbors. Lone pairs need elbow room, so they take the roomier seats.",
-    molecule: 'xef2-axial-strain',
-    focus: 'axial-strain',
-  },
-  { ...SHARED_BOND_ANGLE_BEAT, molecule: 'xef2' },
+  STRAIN_BEAT_INVITE,
 ]
 
 const EQUATORIAL_REVEAL_1: Bubble[] = [
   {
     text:
-      "Right. An axial position has three other groups at 90° to it. Equatorial only has two. Lone pairs are bigger than bonded pairs — they need elbow room — so they take the roomier seats.",
-    molecule: 'xef2-axial-strain',
-    focus: 'axial-strain',
+      "Right. An axial position has three other groups at 90° to it. Equatorial only has two. Lone pairs need elbow room, so they take the roomier seats.",
+    molecule: 'xef2',
+    focus: 'equatorial-reveal',
   },
-  {
-    text:
-      "You can see it here — that's what XeF2 would look like if one lone pair were axial. The three neighbors at 90° crowd it. The real molecule avoids that by putting all three lone pairs equatorial.",
-    molecule: 'xef2-axial-strain',
-    focus: 'axial-strain',
-  },
-  { ...SHARED_BOND_ANGLE_BEAT, molecule: 'xef2' },
+  STRAIN_BEAT_INVITE,
 ]
 
 const ATOMS_PUSH_REVEAL_1: Bubble[] = [
   {
     text:
-      "It's actually the reverse: lone pairs take more space than bonded pairs, so they push the F's around, not the other way. Your blocking intuition was right about the direction — the lone pairs claim the roomier positions.",
+      "It's actually the reverse: lone pairs take more space than bonded pairs, so they push the F's around — not the other way. Your blocking intuition was right about the direction, just inverted on which one's pushing.",
     molecule: 'xef2',
     focus: 'equatorial-reveal',
   },
+  STRAIN_BEAT_INVITE,
+]
+
+const COUNTING_REVEAL_1: Bubble[] = [
   {
     text:
-      "Equatorial seats have only two neighbors at 90°. Axial seats have three. So the lone pairs take equatorial; the F atoms are stuck with axial.",
-    molecule: 'xef2-axial-strain',
-    focus: 'axial-strain',
+      "You're answering the counting question — how many lone pairs Xe has. That comes from the Lewis structure and electron counting. The question here is the space question — once those five electron domains exist, where do they sit?",
+    molecule: 'xef2',
+    focus: 'equatorial-reveal',
   },
-  { ...SHARED_BOND_ANGLE_BEAT, molecule: 'xef2' },
+  STRAIN_BEAT_INVITE,
+]
+
+const BLOCKING_REVEAL_1: Bubble[] = [
+  {
+    text:
+      "Right — they are in the way. More precisely, they're occupying the roomier equatorial positions, which leaves the axial positions for the F atoms.",
+    molecule: 'xef2',
+    focus: 'equatorial-reveal',
+  },
+  STRAIN_BEAT_INVITE,
+]
+
+const IDK_REVEAL_1: Bubble[] = [
+  {
+    text:
+      "Totally fine. Let me show you. Lone pairs take more space than bonded pairs, so they claim the roomier seats — and equatorial has more room than axial.",
+    molecule: 'xef2',
+    focus: 'equatorial-reveal',
+  },
+  STRAIN_BEAT_INVITE,
 ]
 
 const UNCLASSIFIED_REVEAL_1: Bubble[] = [
   {
     text:
-      "Interesting. Here's what's going on — check it against what you were thinking. Lone pairs take more space than bonded pairs, so they claim the roomier seats in the molecule.",
-    molecule: 'xef2-axial-strain',
-    focus: 'axial-strain',
+      "Let's check it against the spatial model. Lone pairs take more space than bonded pairs, so they claim the roomier seats — and equatorial has fewer 90° neighbors than axial.",
+    molecule: 'xef2',
+    focus: 'equatorial-reveal',
   },
-  {
-    text:
-      "Equatorial positions have only two neighbors at 90°. Axial has three. Lone pairs go equatorial because there's more room.",
-    molecule: 'xef2-axial-strain',
-    focus: 'axial-strain',
-  },
-  { ...SHARED_BOND_ANGLE_BEAT, molecule: 'xef2' },
+  STRAIN_BEAT_INVITE,
 ]
 
 export const REVEAL_1_PATHS: Record<Prediction1Key, ArtifactPath> = {
   notational: { reveal1: NOTATIONAL_REVEAL_1 },
   equatorial: { reveal1: EQUATORIAL_REVEAL_1 },
   'atoms-push': { reveal1: ATOMS_PUSH_REVEAL_1 },
+  counting: { reveal1: COUNTING_REVEAL_1 },
+  blocking: { reveal1: BLOCKING_REVEAL_1 },
+  idk: { reveal1: IDK_REVEAL_1 },
   unclassified: { reveal1: UNCLASSIFIED_REVEAL_1 },
 }
 
@@ -318,7 +336,7 @@ export const PREDICTION_2: {
   options: PredictionOption<Prediction2Key>[]
 } = {
   framing:
-    "Want to test the idea? Here's a related case: 5 domains, but with 2 lone pairs instead of 3. What shape do you predict?",
+    "One more. Same row of the chart — 5 domains, but with 2 lone pairs instead of 3. What shape do you predict?",
   options: [
     {
       id: 'linear',
@@ -339,54 +357,51 @@ export const PREDICTION_2: {
 }
 
 // ---------------------------------------------------------------------------
-// Reveal 2 — morph to ClF3, then closing.
+// Reveal 2 — single bubble per branch. Each shows ClF3 (T-shape) and
+// introduces the 5-domain row control as a way to step through the row.
 // ---------------------------------------------------------------------------
 
-const SHARED_TSHAPE_BEAT: Bubble = {
-  text:
-    "Same rule: lone pairs take equatorial. Two lone pairs leave room for one equatorial F and two axial F's, forming a T. If you'd had only one lone pair, you'd get a see-saw. The whole row of your chart is one consistent story.",
-  molecule: 'clf3',
-  focus: 'clf3-tshape',
-}
+const ROW_SCRUBBER_TAIL =
+  "Open the 5-domain row control below the viewport and step through the four examples: PF5 (0 LP, trigonal bipyramidal), SF4 (1 LP, seesaw), ClF3 (2 LP, T-shaped), XeF2 (3 LP, linear). Same row, different lone-pair counts."
 
 const LINEAR_REVEAL_2: Bubble[] = [
   {
     text:
-      "Close — but lone-pair count changes things. With 2 lone pairs instead of 3, you free up one of the equatorial seats. That third equatorial slot now has an F in it.",
+      `Close — but lone-pair count changes the shape. With 2 lone pairs instead of 3, one equatorial seat opens up for an F. That F, plus the two axial F's, traces a T. ${ROW_SCRUBBER_TAIL}`,
     molecule: 'clf3',
     focus: 'clf3-tshape',
+    cue: 'lp-row',
   },
-  SHARED_TSHAPE_BEAT,
 ]
 
 const TSHAPE_REVEAL_2: Bubble[] = [
   {
     text:
-      "Yep — T-shape. Two lone pairs claim two of the three equatorial seats, the third equatorial seat is an F, and the two axial F's stay put. You're looking at ClF3.",
+      `Yep — T-shape. Two lone pairs claim two of the equatorial seats, the third equatorial seat is an F, and the two axial F's stay put. You're looking at ClF3. ${ROW_SCRUBBER_TAIL}`,
     molecule: 'clf3',
     focus: 'clf3-tshape',
+    cue: 'lp-row',
   },
-  SHARED_TSHAPE_BEAT,
 ]
 
 const PYRAMIDAL_REVEAL_2: Bubble[] = [
   {
     text:
-      "Trigonal pyramidal is a 4-domain shape — that's ammonia, the row above. Here we still have 5 domains, just fewer lone pairs. The arrangement stays trigonal bipyramidal underneath; only the visible shape changes.",
+      `Trigonal pyramidal is a 4-domain shape — that's ammonia, the row above. Here we still have 5 domains, just fewer lone pairs. With 2 lone pairs, one equatorial seat is an F and the two axial F's stay put — that's a T. ${ROW_SCRUBBER_TAIL}`,
     molecule: 'clf3',
     focus: 'clf3-tshape',
+    cue: 'lp-row',
   },
-  SHARED_TSHAPE_BEAT,
 ]
 
 const UNCLASSIFIED_REVEAL_2: Bubble[] = [
   {
     text:
-      "Here's what happens with 2 lone pairs. Two equatorial seats are claimed by lone pairs; one equatorial seat is an F; the two axial seats are F's. Result: a T-shape.",
+      `With 2 lone pairs, two equatorial seats are claimed by lone pairs, one equatorial seat is an F, and the two axial F's stay put. The result is a T-shape — that's ClF3. ${ROW_SCRUBBER_TAIL}`,
     molecule: 'clf3',
     focus: 'clf3-tshape',
+    cue: 'lp-row',
   },
-  SHARED_TSHAPE_BEAT,
 ]
 
 export const REVEAL_2_PATHS: Record<Prediction2Key, Bubble[]> = {
@@ -397,14 +412,12 @@ export const REVEAL_2_PATHS: Record<Prediction2Key, Bubble[]> = {
 }
 
 // ---------------------------------------------------------------------------
-// Closing — one bubble that ties the whole arc together. The summary card
-// (rendered alongside the resources panel) carries the screenshot-friendly
-// takeaway.
+// Closing — single bubble that ties the three layers together.
 // ---------------------------------------------------------------------------
 
 export const CLOSING_BUBBLE: Bubble = {
   text:
-    "Here's the move. Your chart compresses every 5-domain shape into one row, but they're all the same underlying idea: lone pairs claim equatorial positions because there's more space, and the F's get whatever's left over. Drag the lone-pair slider from 0 to 3 — you'll see the whole row morph past you: trigonal bipyramidal, see-saw, T-shape, linear. Same logic, different number of lone pairs.",
+    "Three layers, one molecule. Lewis tells you the count: 3 lone pairs, 2 bonds. VSEPR gives you the spatial arrangement: lone pairs claim equatorial because they need room. Molecular geometry names where the atoms end up: linear. The chart isn't lying to you — it's just compressing all three of those into one cell.",
   molecule: 'xef2',
   focus: 'closing',
 }
@@ -417,10 +430,10 @@ export const SUMMARY_CARD: {
 } = {
   title: "XeF2 — what to remember",
   lines: [
-    "Linear molecular geometry, trigonal bipyramidal electron-domain geometry.",
-    "3 lone pairs sit in the equatorial plane; 2 F atoms stay axial.",
-    "Why equatorial: only two 90° neighbors instead of three — more space.",
-    "Same logic across the row: 1 LP → see-saw, 2 LP → T-shape, 3 LP → linear.",
+    "Lewis: 3 lone pairs on Xe, 2 Xe–F bonds.",
+    "VSEPR: lone pairs sit equatorial; only two 90° neighbors instead of three.",
+    "Molecular geometry: linear, F–Xe–F = 180°.",
+    "Same row, varying lone pairs: PF5 (0) → SF4 (1) → ClF3 (2) → XeF2 (3).",
   ],
 }
 
@@ -438,12 +451,39 @@ export const RESOURCES: Resource[] = [
 ]
 
 // ---------------------------------------------------------------------------
-// Free-text classifiers — simple keyword heuristics.
+// Free-text classifiers — keyword heuristics. A productized version would
+// route through a model; for the prototype, hardcoded patterns let us hit
+// the personalized branches reliably.
 // ---------------------------------------------------------------------------
 
 export function classifyPrediction1FreeText(text: string): Prediction1Key {
-  const t = text.toLowerCase()
+  const t = text.toLowerCase().trim()
+  if (t.length === 0) return 'unclassified'
 
+  // I don't know — short, dismissive, or explicit "no idea" responses.
+  const idkExact = new Set([
+    'idk',
+    'i dont know',
+    "i don't know",
+    'dunno',
+    'no idea',
+    'not sure',
+    'unsure',
+    'no clue',
+    '?',
+  ])
+  if (idkExact.has(t)) return 'idk'
+  if (
+    t.startsWith("i don't know") ||
+    t.startsWith('i dont know') ||
+    t.startsWith('no idea') ||
+    t.startsWith('not sure') ||
+    t.startsWith('no clue')
+  ) {
+    return 'idk'
+  }
+
+  // Equatorial — roomier-seats reasoning. Correct.
   const equatorialSignals = [
     'more space',
     'more room',
@@ -455,9 +495,36 @@ export function classifyPrediction1FreeText(text: string): Prediction1Key {
     '90°',
     'equatorial',
     'elbow room',
+    'spread out',
+    'spread apart',
   ]
   if (equatorialSignals.some((s) => t.includes(s))) return 'equatorial'
 
+  // Blocking / in the way — echo of the user's own framing.
+  const blockingSignals = ['block', 'in the way', 'in their way', 'in xe way']
+  if (blockingSignals.some((s) => t.includes(s))) return 'blocking'
+
+  // Counting / electron-rules — answering the Lewis question, not spatial.
+  const countingSignals = [
+    'octet',
+    'noble gas',
+    'electron count',
+    'electrons',
+    'electron rule',
+    'allow',
+    'filling',
+    'filled',
+    'stable',
+    'stability',
+    'full shell',
+    'valence',
+    'lone pair count',
+    'have to be',
+    'always have',
+  ]
+  if (countingSignals.some((s) => t.includes(s))) return 'counting'
+
+  // Notational — "they were drawn that way."
   const notationalSignals = [
     'arbitrary',
     'just drawn',
@@ -465,10 +532,13 @@ export function classifyPrediction1FreeText(text: string): Prediction1Key {
     'convention',
     'random',
     'no reason',
-    'no specific',
+    'no specific reason',
+    'doesnt matter',
+    "doesn't matter",
   ]
   if (notationalSignals.some((s) => t.includes(s))) return 'notational'
 
+  // Atoms push — inverted causality.
   const atomsPushSignals = [
     'f atoms push',
     'fluorine push',
@@ -483,11 +553,17 @@ export function classifyPrediction1FreeText(text: string): Prediction1Key {
 }
 
 export function classifyPrediction2FreeText(text: string): Prediction2Key {
-  const t = text.toLowerCase()
+  const t = text.toLowerCase().trim()
 
-  if (t.includes('t-shape') || t.includes('t shape') || t.includes('tshape') || t.includes('t-shaped'))
+  if (
+    t.includes('t-shape') ||
+    t.includes('t shape') ||
+    t.includes('tshape') ||
+    t.includes('t-shaped')
+  )
     return 'tshape'
-  if (t.includes('linear') || t.includes('straight line') || t.includes('180')) return 'linear'
+  if (t.includes('linear') || t.includes('straight line') || t.includes('180'))
+    return 'linear'
   if (t.includes('pyramidal') || t.includes('pyramid')) return 'pyramidal'
 
   return 'unclassified'
