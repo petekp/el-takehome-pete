@@ -244,10 +244,6 @@ export function Artifact() {
         <Header
           title="Why XeF₂ is linear"
           attachments={artifact.userAttachments}
-          materialsCued={
-            activeCue(artifact) === 'panel-materials' &&
-            !artifact.panelsExplored.includes('materials')
-          }
           onOpenMaterials={handleOpenMaterials}
           onReferences={() => setReferencesOpen(true)}
         />
@@ -353,13 +349,11 @@ export function Artifact() {
 function Header({
   title,
   attachments,
-  materialsCued,
   onOpenMaterials,
   onReferences,
 }: {
   title: string
   attachments: ImageAttachment[]
-  materialsCued: boolean
   onOpenMaterials: () => void
   onReferences: () => void
 }) {
@@ -375,7 +369,6 @@ function Header({
       <div className="flex items-center gap-2">
         <MaterialsHeaderStack
           attachments={attachments}
-          cued={materialsCued}
           onClick={onOpenMaterials}
         />
         <div className="flex items-center gap-1">
@@ -396,11 +389,9 @@ function Header({
 
 function MaterialsHeaderStack({
   attachments,
-  cued,
   onClick,
 }: {
   attachments: ImageAttachment[]
-  cued: boolean
   onClick: () => void
 }) {
   if (attachments.length === 0) return null
@@ -425,15 +416,8 @@ function MaterialsHeaderStack({
       className={cn(
         'group relative inline-flex h-7 items-center gap-1.5 rounded-md px-2',
         'hover:bg-state-hover transition-colors',
-        cued && 'z-10 shadow-[0_0_0_2px_rgba(0,139,255,0.2)]',
       )}
     >
-      {cued && (
-        <span
-          aria-hidden
-          className="border-accent/40 bg-accent/8 pointer-events-none absolute -inset-0.5 -z-10 animate-[cuePulse_1600ms_ease-in-out_infinite] rounded-md border"
-        />
-      )}
       <span
         className="relative -my-1 inline-flex h-9 shrink-0"
         style={{ width: CARD_PX + (visible.length - 1) * REST_OFFSET }}
