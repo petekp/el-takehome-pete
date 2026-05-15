@@ -231,6 +231,7 @@ function AttachmentRow({
           key={a.id}
           className="border-border-subtle bg-page group relative flex items-center gap-2 rounded-md border py-1 pl-1 pr-2"
         >
+          {/* eslint-disable-next-line @next/next/no-img-element -- user-selected data URL preview, not a static optimized asset. */}
           <img
             src={`data:${a.mediaType};base64,${a.data}`}
             alt={a.name}

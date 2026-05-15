@@ -22,6 +22,10 @@ import type {
 
 const apiKey = process.env.ANTHROPIC_API_KEY
 const MODEL = 'claude-sonnet-4-6'
+const STREAM_HEADERS = {
+  'Content-Type': ENVELOPE_CONTENT_TYPE,
+  'Cache-Control': 'no-cache',
+}
 
 type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
 
@@ -173,11 +177,53 @@ function wrapperSystemPrompt(
   ].join('\n')
 }
 
-export async function POST(req: Request) {
-  if (!apiKey) {
-    return new Response('ANTHROPIC_API_KEY not configured', { status: 501 })
+function fallbackWrapperText(
+  conceptId: ConceptId,
+  afterLearning: boolean,
+  artifactInteraction?: ArtifactInteractionSummary | null,
+): string {
+  const concept = getConcept(conceptId)
+  if (afterLearning) {
+    const firstPrediction = artifactInteraction?.prediction1?.bucket
+    const callback =
+      firstPrediction === 'equatorial'
+        ? 'The piece you leaned into there is the key one: the equatorial seats give the lone pairs more room.'
+        : firstPrediction
+          ? 'That spatial move is the heart of it: the lone pairs are not just counted, they have to sit somewhere in 3D.'
+          : `That walkthrough was meant to make ${concept.descriptors.title.toLowerCase()} feel spatial instead of like a chart rule.`
+
+    return [
+      callback,
+      "If another row on your chart still feels slippery, send me the molecule or the row and we'll walk through it the same way.",
+    ].join(' ')
   }
 
+  return [
+    'The five electron domains around Xe arrange as a trigonal bipyramid.',
+    'Lone pairs take more room than bonded pairs, so the three lone pairs claim the roomier equatorial seats, where each has fewer 90-degree neighbors.',
+    "That leaves the two F atoms in the axial positions, directly opposite each other, which is why the molecular geometry is linear even though the electron-domain geometry is trigonal bipyramidal.",
+    'Your “blocking” intuition is half-right: the lone pairs are claiming space, but they are doing it in 3D rather than simply blocking bonds in the flat Lewis drawing.',
+  ].join(' ')
+}
+
+function fallbackWrapperResponse(
+  conceptId: ConceptId,
+  afterLearning: boolean,
+  artifactInteraction?: ArtifactInteractionSummary | null,
+): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const envelope = new EnvelopeEncoder(controller)
+      envelope.meta({ isArc: false, conceptId })
+      envelope.text(fallbackWrapperText(conceptId, afterLearning, artifactInteraction))
+      envelope.done()
+    },
+  })
+
+  return new Response(stream, { headers: STREAM_HEADERS })
+}
+
+export async function POST(req: Request) {
   const body = (await req.json()) as {
     conceptId: ConceptId
     messages: IncomingMessage[]
@@ -190,6 +236,15 @@ export async function POST(req: Request) {
     afterLearning = false,
     artifactInteraction,
   } = body
+
+  if (!apiKey) {
+    return fallbackWrapperResponse(
+      conceptId,
+      afterLearning,
+      artifactInteraction,
+    )
+  }
+
   const client = new Anthropic({ apiKey })
   const latestUser = latestUserMessage(messages)
 
@@ -231,9 +286,6 @@ export async function POST(req: Request) {
   })
 
   return new Response(stream, {
-    headers: {
-      'Content-Type': ENVELOPE_CONTENT_TYPE,
-      'Cache-Control': 'no-cache',
-    },
+    headers: STREAM_HEADERS,
   })
 }

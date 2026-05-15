@@ -140,6 +140,7 @@ export function MaterialsLightbox({
         <div className="grid gap-4 sm:grid-cols-2">
           {attachments.map((a) => (
             <figure key={a.id} className="flex flex-col gap-2">
+              {/* eslint-disable-next-line @next/next/no-img-element -- enlarged user attachment data URLs are not static optimized assets. */}
               <img
                 src={`data:${a.mediaType};base64,${a.data}`}
                 alt={a.name}

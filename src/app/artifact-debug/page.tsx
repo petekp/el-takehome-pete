@@ -162,7 +162,8 @@ export default function ArtifactDebugPage() {
       clickPanel: (id) => {
         setArtifact((a) => ({
           ...a,
-          activePanel: a.activePanel === id ? null : id,
+          activePanel:
+            id === 'materials' ? a.activePanel : a.activePanel === id ? null : id,
           panelsExplored: a.panelsExplored.includes(id) ? a.panelsExplored : [...a.panelsExplored, id],
         }))
       },

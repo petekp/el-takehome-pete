@@ -23,6 +23,7 @@ export function Greeting({ className, style, name = 'there', timeOfDay, ...props
       style={{ fontVariationSettings: '"opsz" 48', ...style } as CSSProperties}
       {...props}
     >
+      {/* eslint-disable-next-line @next/next/no-img-element -- tiny decorative SVG; Next Image adds no value here. */}
       <img src="/assets/ClaudeSpark.svg" alt="" className="h-8 w-8" />
       <span suppressHydrationWarning>
         {timeOfDay ?? getTimeOfDay()}, {name}

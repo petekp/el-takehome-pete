@@ -14,12 +14,14 @@ export function UserMessage({ className, text, attachments, children, ...props }
       {hasAttachments && (
         <div className="flex max-w-[85%] flex-wrap justify-end gap-2">
           {attachments!.map((a) => (
-            <img
-              key={a.id}
-              src={`data:${a.mediaType};base64,${a.data}`}
-              alt={a.name}
-              className="border-border-subtle max-h-48 max-w-[200px] rounded-lg border object-cover"
-            />
+            <div key={a.id}>
+              {/* eslint-disable-next-line @next/next/no-img-element -- chat attachments are user-provided data URLs. */}
+              <img
+                src={`data:${a.mediaType};base64,${a.data}`}
+                alt={a.name}
+                className="border-border-subtle max-h-48 max-w-[200px] rounded-lg border object-cover"
+              />
+            </div>
           ))}
         </div>
       )}

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion, type Variants } from 'motion/react'
 import {
   BookOpen,
+  Check,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
@@ -13,6 +14,7 @@ import {
   Share2,
   X,
 } from 'lucide-react'
+import type { RefObject } from 'react'
 import { cn } from '@/lib/utils'
 import {
   activeCue,
@@ -91,12 +93,44 @@ const stepSlideVariants: Variants = {
 
 
 type LiteracyPanel = 'lewis' | 'geometry'
+type ShareStatus = 'idle' | 'copied' | 'failed' | 'unavailable'
+type FullscreenStatus = 'idle' | 'failed' | 'unavailable'
 
 function panelDisplayLabel(panel: ArtifactState['activePanel']): string {
   if (panel === 'lewis') return 'Lewis'
   if (panel === 'geometry') return 'Molecular geometry'
   if (panel === 'materials') return 'Materials'
   return 'Default'
+}
+
+function isLiteracyPanel(panel: ArtifactState['activePanel']): panel is LiteracyPanel {
+  return panel === 'lewis' || panel === 'geometry'
+}
+
+function defaultRowLpCountForStage(stage: ArtifactStage): number | null {
+  return stage === 'reveal-2' ? 2 : null
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (window.navigator.clipboard) {
+    await window.navigator.clipboard.writeText(text)
+    return true
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  textarea.setSelectionRange(0, text.length)
+  try {
+    return document.execCommand('copy')
+  } finally {
+    document.body.removeChild(textarea)
+  }
 }
 
 export function Artifact() {
@@ -115,9 +149,14 @@ export function Artifact() {
 
   const [referencesOpen, setReferencesOpen] = useState(false)
   const [materialsOpen, setMaterialsOpen] = useState(false)
-  const [expandedPanel, setExpandedPanel] = useState<LiteracyPanel | null>(null)
+  const [expandedPanel, setExpandedPanel] = useState<{
+    panel: LiteracyPanel
+    ownerKey: string
+  } | null>(null)
   const [introStatementReady, setIntroStatementReady] = useState(false)
   const [introStatementStreamed, setIntroStatementStreamed] = useState(false)
+  const [stepDirection, setStepDirection] = useState<StepDirection>('forward')
+  const artifactRef = useRef<HTMLElement | null>(null)
 
   const handleMoleculeEntranceStart = useCallback(() => {
     setIntroStatementReady(true)
@@ -131,33 +170,33 @@ export function Artifact() {
   // scripted molecule at its natural LP count. Integer 0..3 = active: scene
   // renders the matching real example (0→PF5, 1→SF4, 2→ClF3, 3→XeF2).
   // The chip itself is hidden outside reveal-2 / closing.
-  const [rowLpCount, setRowLpCount] = useState<number | null>(null)
-  const [trackedStage, setTrackedStage] = useState(artifact?.stage)
-  if (artifact && artifact.stage !== trackedStage) {
-    setTrackedStage(artifact.stage)
-    // Entering reveal-2 auto-opens the row at ClF3. Anywhere else: deactivate.
-    // Closing keeps the chip visible but defaults the scene back to the
-    // scripted XeF2.
-    setRowLpCount(artifact.stage === 'reveal-2' ? 2 : null)
-  }
+  const [rowSelection, setRowSelection] = useState<{
+    stage: ArtifactStage
+    value: number | null
+  } | null>(null)
+  const rowLpCount =
+    artifact && rowSelection?.stage === artifact.stage
+      ? rowSelection.value
+      : artifact
+        ? defaultRowLpCountForStage(artifact.stage)
+        : null
 
   // Reset expansion whenever the active panel changes underneath (panel
   // deactivated, switched to another literacy panel, etc.) so we never end
-  // up with an expanded overlay for a panel that isn't even active. Uses the
-  // React derived-state pattern: a tracked prop value triggers a render-time
-  // state reset when the prop changes.
-  const [prevActivePanel, setPrevActivePanel] = useState(artifact?.activePanel)
-  if (artifact?.activePanel !== prevActivePanel) {
-    setPrevActivePanel(artifact?.activePanel)
-    if (
-      expandedPanel &&
-      (artifact?.activePanel !== expandedPanel ||
-        (artifact?.activePanel !== 'lewis' &&
-          artifact?.activePanel !== 'geometry'))
-    ) {
-      setExpandedPanel(null)
-    }
-  }
+  // up with an expanded overlay for a panel that isn't even active.
+  const rawActivePanel = artifact?.activePanel ?? null
+  const activeLiteracyPanel: LiteracyPanel | null = isLiteracyPanel(rawActivePanel)
+    ? rawActivePanel
+    : null
+  const expandedOwnerKey = artifact
+    ? `${artifact.stage}:${artifact.bubbleIndex}:${activeLiteracyPanel ?? 'none'}`
+    : 'none'
+  const visibleExpandedPanel =
+    expandedPanel &&
+    expandedPanel.ownerKey === expandedOwnerKey &&
+    expandedPanel.panel === activeLiteracyPanel
+      ? expandedPanel.panel
+      : null
 
   useEffect(() => {
     if (!referencesOpen && !materialsOpen) return
@@ -171,6 +210,44 @@ export function Artifact() {
     return () => window.removeEventListener('keydown', onKey)
   }, [referencesOpen, materialsOpen])
 
+  const handleOpenMaterials = useCallback(() => {
+    clickPanel('materials')
+    setMaterialsOpen(true)
+  }, [clickPanel])
+
+  const handleAdvance = useCallback(() => {
+    setStepDirection('forward')
+    advanceArtifact()
+  }, [advanceArtifact])
+
+  const handleRetreat = useCallback(() => {
+    setStepDirection('back')
+    retreatArtifact()
+  }, [retreatArtifact])
+
+  const handleSubmitPrediction1 = useCallback(
+    (input: { optionId?: Prediction1Key; freeText?: string }) => {
+      setStepDirection('forward')
+      recordPrediction1(input)
+    },
+    [recordPrediction1],
+  )
+
+  const handleSubmitPrediction2 = useCallback(
+    (input: { optionId?: Prediction2Key; freeText?: string }) => {
+      setStepDirection('forward')
+      recordPrediction2(input)
+    },
+    [recordPrediction2],
+  )
+
+  const handleExpandPanel = useCallback(
+    (panel: LiteracyPanel | null) => {
+      setExpandedPanel(panel ? { panel, ownerKey: expandedOwnerKey } : null)
+    },
+    [expandedOwnerKey],
+  )
+
   if (!artifact || arc.beat === 'idle') {
     return <ArtifactCollapsed />
   }
@@ -182,6 +259,7 @@ export function Artifact() {
 
   return (
     <section
+      ref={artifactRef}
       className={cn(
         'border-border-subtle bg-surface my-4 overflow-hidden rounded-lg border shadow-sm',
         'relative',
@@ -214,7 +292,12 @@ export function Artifact() {
         <Header
           title="Why XeF₂ is linear"
           attachments={artifact.userAttachments}
-          onOpenMaterials={() => setMaterialsOpen(true)}
+          materialsCued={
+            activeCue(artifact) === 'panel-materials' &&
+            !artifact.panelsExplored.includes('materials')
+          }
+          fullscreenTargetRef={artifactRef}
+          onOpenMaterials={handleOpenMaterials}
           onReferences={() => setReferencesOpen(true)}
         />
 
@@ -242,7 +325,9 @@ export function Artifact() {
             >
               <LonePairSelect
                 value={rowLpCount ?? 3}
-                onChange={(v) => setRowLpCount(v)}
+                onChange={(value) =>
+                  setRowSelection({ stage: artifact.stage, value })
+                }
               />
             </ControlChip>
           )}
@@ -261,12 +346,13 @@ export function Artifact() {
             interactive={interactive}
             introStatementReady={introStatementReady}
             introStatementStreamed={introStatementStreamed}
-            expandedPanel={expandedPanel}
-            onExpandPanel={setExpandedPanel}
-            onAdvance={advanceArtifact}
-            onRetreat={retreatArtifact}
-            onSubmitPrediction1={recordPrediction1}
-            onSubmitPrediction2={recordPrediction2}
+            direction={stepDirection}
+            expandedPanel={visibleExpandedPanel}
+            onExpandPanel={handleExpandPanel}
+            onAdvance={handleAdvance}
+            onRetreat={handleRetreat}
+            onSubmitPrediction1={handleSubmitPrediction1}
+            onSubmitPrediction2={handleSubmitPrediction2}
             onClose={closeArtifact}
             onOpenReferences={() => setReferencesOpen(true)}
             onIntroStatementDone={handleIntroStatementDone}
@@ -276,10 +362,10 @@ export function Artifact() {
               The thumbnail inside the bubble stays in flow with opacity 0 so
               content position never shifts. */}
           <AnimatePresence>
-            {expandedPanel && (
+            {visibleExpandedPanel && (
               <motion.div
-                key={`expanded-${expandedPanel}`}
-                layoutId={`panel-diagram-${expandedPanel}`}
+                key={`expanded-${visibleExpandedPanel}`}
+                layoutId={`panel-diagram-${visibleExpandedPanel}`}
                 transition={{ type: 'spring', stiffness: 280, damping: 32, mass: 0.7 }}
                 className={cn(
                   'bg-surface/95 absolute inset-0 z-30 flex flex-col items-center',
@@ -288,7 +374,7 @@ export function Artifact() {
               >
                 <button
                   type="button"
-                  onClick={() => setExpandedPanel(null)}
+                  onClick={() => handleExpandPanel(null)}
                   aria-label="Collapse diagram"
                   className={cn(
                     'text-text-tertiary hover:text-text-secondary hover:bg-state-hover',
@@ -299,12 +385,12 @@ export function Artifact() {
                   <Minimize2 className="size-4" />
                 </button>
                 <PanelDiagram
-                  panel={expandedPanel}
+                  panel={visibleExpandedPanel}
                   molecule={artifact.activeMolecule}
                   expanded
                 />
                 <figcaption className="text-text-tertiary font-serif text-[14px] italic">
-                  {expandedPanel === 'lewis' ? 'Lewis structure' : 'Molecular geometry'}
+                  {visibleExpandedPanel === 'lewis' ? 'Lewis structure' : 'Molecular geometry'}
                 </figcaption>
               </motion.div>
             )}
@@ -330,11 +416,15 @@ export function Artifact() {
 function Header({
   title,
   attachments,
+  materialsCued,
+  fullscreenTargetRef,
   onOpenMaterials,
   onReferences,
 }: {
   title: string
   attachments: ImageAttachment[]
+  materialsCued: boolean
+  fullscreenTargetRef: RefObject<HTMLElement | null>
   onOpenMaterials: () => void
   onReferences: () => void
 }) {
@@ -350,21 +440,142 @@ function Header({
       <div className="flex items-center gap-2">
         <MaterialsHeaderStack
           attachments={attachments}
+          cued={materialsCued}
           onClick={onOpenMaterials}
         />
         <div className="flex items-center gap-1">
           <HeaderLabeledButton label="Resources" onClick={onReferences}>
             <BookOpen className="size-3.5" />
           </HeaderLabeledButton>
-          <HeaderIconButton label="Share" onClick={() => {}}>
-            <Share2 className="size-3.5" />
-          </HeaderIconButton>
-          <HeaderIconButton label="Fullscreen" onClick={() => {}}>
-            <Expand className="size-3.5" />
-          </HeaderIconButton>
+          <ShareButton />
+          <FullscreenButton targetRef={fullscreenTargetRef} />
         </div>
       </div>
     </header>
+  )
+}
+
+function ShareButton() {
+  const [status, setStatus] = useState<ShareStatus>('idle')
+  const resetTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (resetTimerRef.current !== null) window.clearTimeout(resetTimerRef.current)
+    }
+  }, [])
+
+  const scheduleReset = useCallback(() => {
+    if (resetTimerRef.current !== null) window.clearTimeout(resetTimerRef.current)
+    resetTimerRef.current = window.setTimeout(() => {
+      setStatus('idle')
+      resetTimerRef.current = null
+    }, 1600)
+  }, [])
+
+  const handleShare = useCallback(async () => {
+    if (status === 'unavailable') return
+    try {
+      const url = window.location.href
+      if (await copyTextToClipboard(url)) {
+        setStatus('copied')
+        scheduleReset()
+        return
+      }
+      if (window.navigator.share) {
+        await window.navigator.share({ title: 'Why XeF2 is linear', url })
+        setStatus('idle')
+        return
+      }
+      setStatus('unavailable')
+    } catch (err) {
+      if ((err as Error)?.name === 'AbortError') return
+      setStatus('failed')
+      scheduleReset()
+    }
+  }, [scheduleReset, status])
+
+  const label =
+    status === 'unavailable'
+      ? 'Share unavailable'
+      : status === 'copied'
+        ? 'Link copied'
+        : status === 'failed'
+          ? 'Share failed'
+          : 'Share'
+
+  return (
+    <HeaderIconButton
+      label={label}
+      onClick={handleShare}
+      disabled={status === 'unavailable'}
+      tooltip={
+        status === 'unavailable'
+          ? 'Sharing is unavailable in this browser'
+          : status === 'failed'
+            ? 'Could not copy the link'
+            : status === 'copied'
+              ? 'Link copied'
+              : 'Copy link'
+      }
+    >
+      {status === 'copied' ? <Check className="size-3.5" /> : <Share2 className="size-3.5" />}
+    </HeaderIconButton>
+  )
+}
+
+function FullscreenButton({ targetRef }: { targetRef: RefObject<HTMLElement | null> }) {
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [status, setStatus] = useState<FullscreenStatus>('idle')
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === targetRef.current)
+      setStatus('idle')
+    }
+
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
+  }, [targetRef])
+
+  const handleFullscreen = useCallback(() => {
+    const el = targetRef.current
+    if (status === 'unavailable') return
+    if (!el || !document.fullscreenEnabled || !el.requestFullscreen) {
+      setStatus('unavailable')
+      return
+    }
+    if (document.fullscreenElement === el) {
+      void document.exitFullscreen().catch(() => setStatus('failed'))
+      return
+    }
+    void el.requestFullscreen().catch(() => setStatus('failed'))
+  }, [status, targetRef])
+
+  const label =
+    status === 'unavailable'
+      ? 'Fullscreen unavailable'
+      : status === 'failed'
+        ? 'Fullscreen failed'
+        : isFullscreen
+          ? 'Exit fullscreen'
+          : 'Fullscreen'
+
+  return (
+    <HeaderIconButton
+      label={label}
+      onClick={handleFullscreen}
+      disabled={status === 'unavailable'}
+      tooltip={
+        status === 'unavailable'
+          ? 'Fullscreen is unavailable in this browser'
+          : status === 'failed'
+            ? 'Could not enter fullscreen'
+            : label
+      }
+    >
+      {isFullscreen ? <Minimize2 className="size-3.5" /> : <Expand className="size-3.5" />}
+    </HeaderIconButton>
   )
 }
 
@@ -375,9 +586,11 @@ function Header({
  */
 function MaterialsHeaderStack({
   attachments,
+  cued,
   onClick,
 }: {
   attachments: ImageAttachment[]
+  cued: boolean
   onClick: () => void
 }) {
   if (attachments.length === 0) return null
@@ -405,8 +618,15 @@ function MaterialsHeaderStack({
       className={cn(
         'group relative inline-flex h-7 items-center gap-1.5 rounded-md px-2',
         'hover:bg-state-hover transition-colors',
+        cued && 'z-10 shadow-[0_0_0_2px_rgba(0,139,255,0.2)]',
       )}
     >
+      {cued && (
+        <span
+          aria-hidden
+          className="border-accent/40 bg-accent/8 pointer-events-none absolute -inset-0.5 -z-10 animate-[cuePulse_1600ms_ease-in-out_infinite] rounded-md border"
+        />
+      )}
       <span
         // -my-1 lets the size-9 cards overhang the h-7 button vertically.
         // Width is fixed at the rest size so the deck-spread on hover
@@ -508,6 +728,7 @@ type RightPaneProps = {
   interactive: boolean
   introStatementReady: boolean
   introStatementStreamed: boolean
+  direction: StepDirection
   expandedPanel: LiteracyPanel | null
   onExpandPanel: (panel: LiteracyPanel | null) => void
   onAdvance: () => void
@@ -524,6 +745,7 @@ function RightPane({
   interactive,
   introStatementReady,
   introStatementStreamed,
+  direction,
   expandedPanel,
   onExpandPanel,
   onAdvance,
@@ -547,17 +769,6 @@ function RightPane({
   const position = stepPosition(artifact.stage, artifact.bubbleIndex)
 
   const canRetreat = !(artifact.stage === 'opening' && artifact.bubbleIndex === 0)
-
-  // Track navigation direction so the right-pane state content slides in
-  // from the right when the user advances and from the left when they go
-  // back. Falls through to 'forward' for the very first render. Uses the
-  // React derived-state pattern: a tracked previous-position state lets us
-  // compute the direction in render and update inline when the prop changes.
-  const [prevPosition, setPrevPosition] = useState(position)
-  const direction: 'forward' | 'back' = position < prevPosition ? 'back' : 'forward'
-  if (position !== prevPosition) {
-    setPrevPosition(position)
-  }
 
   const isFinalBeat = isClosing
   const canAdvance = interactive && !isPredict && !!currentBubble && !isFinalBeat

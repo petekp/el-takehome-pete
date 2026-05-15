@@ -233,8 +233,8 @@ export type PrototypeStore = {
   toggleChip: (key: ChipKey) => void
   /** Set a chip directly. Used by beats that drive a specific chip on/off. */
   setChip: (key: ChipKey, value: boolean) => void
-  /** Click a representation panel — enters that panel's 3D treatment mode
-   *  and records the click. */
+  /** Click a representation panel — records the click, and enters 3D
+   *  treatment mode for panels that have one. */
   clickPanel: (id: RepresentationPanelId) => void
   /** Accumulate rotation delta (radians). Used by the debug harness only. */
   addRotation: (deltaRad: number) => void
@@ -851,7 +851,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       withActiveArc(s, (arc) => {
         const a = arc.artifact
         if (!a) return arc
-        const activePanel = a.activePanel === id ? null : id
+        const activePanel =
+          id === 'materials' ? a.activePanel : a.activePanel === id ? null : id
         const panelsExplored = a.panelsExplored.includes(id)
           ? a.panelsExplored
           : [...a.panelsExplored, id]

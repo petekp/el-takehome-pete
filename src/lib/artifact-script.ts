@@ -177,10 +177,11 @@ export function stepPosition(
   stage: keyof typeof STAGE_STEP_OFFSET,
   bubbleIndex: number,
 ): number {
+  const clamp = (n: number) => Math.max(1, Math.min(TOTAL_STEPS, n))
   if (stage === 'predict-1' || stage === 'predict-2') {
-    return STAGE_STEP_OFFSET[stage] + 1
+    return clamp(STAGE_STEP_OFFSET[stage] + 1)
   }
-  return STAGE_STEP_OFFSET[stage] + bubbleIndex + 1
+  return clamp(STAGE_STEP_OFFSET[stage] + bubbleIndex + 1)
 }
 
 // ---------------------------------------------------------------------------
