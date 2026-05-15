@@ -152,7 +152,7 @@ Next.js 16 (App Router, Turbopack) · React 19 · Tailwind v4 · Base UI · `luc
 
 ## Submission notes
 
-- **Live deploy:** linked in the email along with this repo.
-- **Walkthrough video + design rationale doc:** emailed alongside.
-- **Claude transcripts:** delivered as a separate zip (the `transcripts-bundle/` tree, gitignored to keep the public repo focused). Includes my full Claude.ai conversation history and every Claude Code session that touched the assignment, plus a README mapping sessions to phases.
+- **Live prototype:** https://el-labs-takehome-pete.vercel.app
+- **Walkthrough video:** attached to the [`submission-v1` release](https://github.com/petekp/el-takehome-pete/releases/tag/submission-v1) ([direct download](https://github.com/petekp/el-takehome-pete/releases/download/submission-v1/pete-exercise-walkthrough.mp4) · ~119 MB). Release asset rather than checked-in file because GitHub rejects files over 100 MB on `git push`.
+- **Claude transcripts:** [`transcripts-bundle/`](transcripts-bundle/) in this repo. Includes full Claude.ai conversation history and every Claude Code session that touched the assignment, plus a [README](transcripts-bundle/README.md) mapping sessions to phases.
 - **Authored design artifacts in this repo:** [`docs/exercise-brief.md`](docs/exercise-brief.md) (principles + intent), [`docs/prd-in-context-learning-prototype.md`](docs/prd-in-context-learning-prototype.md) (implementation spec), [`docs/KICKOFF.md`](docs/KICKOFF.md) (sequencing + decisions), [`AGENT_CHANGELOG.md`](AGENT_CHANGELOG.md) (spec → shipping deviations).
