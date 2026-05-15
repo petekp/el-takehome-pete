@@ -37,25 +37,9 @@ Mechanically and conceptually, the concept I prototyped hinges on a combination 
    - drag a lone pair toward an axial position,
    - compare Lewis vs. Molecular geometry,
    - use the 5-domain row selector after the ClF3 reveal.
-5. Click **Done** to return to chat. Claude receives a compact summary of what happened inside the artifact, so the follow-up can use the user's path through the interaction.
+5. Click **Done** to return to chat. Claude receives a compact summary of what happened inside the artifact, so the follow-up can use the user's path through the interaction. You don't necessarily have to click **Done** to continue chatting with Claude; you can even chat with Claude before or during interacting with the artifact.
 
-The user can choose the direct-answer path. They choose the pace.
-
-## Assignment Fit
-
-The assignment asks for a prototype that helps users learn while working with AI. I built for the moments where the user actually has to think. A normal answer would name XeF2 as linear and move on. This prototype asks the user to make a prediction, shows the gap between that prediction and the 3D molecule, and asks them to apply the same rule to a different molecule.
-
-The core learning target is representation literacy:
-
-- **Lewis structure** tells the count of bonds and lone pairs.
-- **VSEPR** explains the spatial arrangement of electron domains.
-- **Molecular geometry** names where the atoms end up.
-
-The student's original intuition was that the lone pairs were "blocking" bonds. Claude treats that as a useful near-miss: the lone pairs do take up space, but the important question is where they sit in 3D.
-
-## Why Option B
-
-I chose Option B because it names the tension I feel most sharply in my daily work with Claude: how do you amplify output without losing the plot? You can ship faster and still end up a stranger to your own work. I wanted to design into that gap. Claude could answer the question in one turn, but a small act of prediction or manipulation would let the user leave with a stronger model and stay the author of their own thinking.
+The user can choose the direct-answer path if they choose; no judgement either way.
 
 ## Process
 

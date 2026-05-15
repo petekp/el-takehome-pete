@@ -7,14 +7,28 @@ import {
   SidebarNavItem,
   SidebarSection,
 } from '@/components/chat'
-import { ArtifactPanel } from '@/components/prototype'
 import { useChatStore } from '@/lib/chat-store'
 import { cn } from '@/lib/utils'
 import { Folder, Plus } from 'lucide-react'
 import { usePathname, useRouter } from 'next/navigation'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useSyncExternalStore, type ReactNode } from 'react'
 
 const COLLAPSED_KEY = 'education-labs:sidebar-collapsed'
+const COLLAPSED_CHANGE_EVENT = 'education-labs:sidebar-collapsed-change'
+
+function readCollapsedPreference() {
+  if (typeof window === 'undefined') return false
+  return localStorage.getItem(COLLAPSED_KEY) === '1'
+}
+
+function subscribeCollapsedPreference(onChange: () => void) {
+  window.addEventListener('storage', onChange)
+  window.addEventListener(COLLAPSED_CHANGE_EVENT, onChange)
+  return () => {
+    window.removeEventListener('storage', onChange)
+    window.removeEventListener(COLLAPSED_CHANGE_EVENT, onChange)
+  }
+}
 
 function toStableDomId(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, '-')
@@ -28,30 +42,25 @@ const STANDALONE_ROUTE_PREFIXES = ['/evolution']
 export function AppShell({ children }: { children: ReactNode }) {
   const { config, chats, deleteChat } = useChatStore()
   const pathname = usePathname()
-  const router = useRouter()
-  const [collapsed, setCollapsed] = useState(false)
-
-  useEffect(() => {
-    // Deferred localStorage hydration; render both sides with the default
-    // collapsed=false, then restore the user's preference post-mount.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setCollapsed(localStorage.getItem(COLLAPSED_KEY) === '1')
-  }, [])
+  const { push } = useRouter()
+  const collapsed = useSyncExternalStore(
+    subscribeCollapsedPreference,
+    readCollapsedPreference,
+    () => false,
+  )
 
   if (STANDALONE_ROUTE_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
     return <>{children}</>
   }
 
   const toggleSidebar = () => {
-    setCollapsed((c) => {
-      localStorage.setItem(COLLAPSED_KEY, c ? '0' : '1')
-      return !c
-    })
+    localStorage.setItem(COLLAPSED_KEY, collapsed ? '0' : '1')
+    window.dispatchEvent(new Event(COLLAPSED_CHANGE_EVENT))
   }
 
   const handleDelete = (chatId: string) => {
     deleteChat(chatId)
-    if (pathname === `/chat/${chatId}`) router.push('/new')
+    if (pathname === `/chat/${chatId}`) push('/new')
   }
 
   return (
@@ -61,10 +70,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           <SidebarNavItem href="/new" icon={Plus} label="New chat" />
           <SidebarNavItem href="/projects" icon={Folder} label="Projects" />
         </SidebarNav>
-
-        <div className="group-data-[collapsed]/sidebar:hidden">
-          <ArtifactPanel />
-        </div>
 
         {chats.length > 0 && (
           <SidebarSection label="Recents">

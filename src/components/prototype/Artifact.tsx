@@ -1014,8 +1014,8 @@ function Stepper({
         onClick={resetMode ? onReset : onRetreat}
         disabled={!canRetreat}
         className={cn(
-          'text-text-tertiary hover:text-text-secondary inline-flex items-center gap-1 text-[12px]',
-          'transition-colors disabled:cursor-not-allowed disabled:opacity-30',
+          'text-text-tertiary hover:bg-state-hover hover:text-text-secondary inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[12px]',
+          'bg-transparent transition-colors focus-visible:bg-state-hover focus-visible:text-text-secondary focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent',
         )}
       >
         {retreatIcon}
@@ -1029,8 +1029,8 @@ function Stepper({
         onClick={() => onAdvance()}
         disabled={!canAdvance}
         className={cn(
-          'text-text-secondary hover:text-text-primary inline-flex items-center gap-1 text-[12px]',
-          'transition-colors disabled:cursor-not-allowed disabled:opacity-30',
+          'text-text-secondary hover:bg-state-hover hover:text-text-primary inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[12px]',
+          'bg-transparent transition-colors focus-visible:bg-state-hover focus-visible:text-text-primary focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent',
         )}
       >
         Next
