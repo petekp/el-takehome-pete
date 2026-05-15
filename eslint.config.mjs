@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local-only checkpoint worktrees of prior commits — gitignored, not
+    // part of the shipping source tree, but eslint would otherwise crawl them.
+    ".worktrees/**",
   ]),
 ]);
 
