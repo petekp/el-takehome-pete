@@ -928,7 +928,7 @@ function PredictPanel<K extends string>({
       <p className="text-text-primary font-serif text-[17px] leading-relaxed">{framing}</p>
 
       <div className="mt-1 flex flex-col gap-1">
-        <div className="border-border-subtle bg-surface flex flex-col overflow-hidden rounded-md border">
+        <div className="bg-surface flex flex-col rounded-md">
           {options.map((opt, idx) => (
             <button
               key={opt.id}
@@ -936,12 +936,13 @@ function PredictPanel<K extends string>({
               disabled={disabled}
               onClick={() => onSubmit({ optionId: opt.id })}
               className={cn(
-                'group text-text-primary font-text relative',
-                idx > 0 && 'border-border-subtle border-t',
-                'first:rounded-t-md last:rounded-b-md',
+                'group text-text-primary font-text border-border-subtle bg-surface relative border',
+                idx > 0 && '-mt-px',
+                'rounded-none first:rounded-t-md last:rounded-b-md',
                 'flex items-start gap-2.5 px-3 py-2.5 text-left text-[13px] leading-snug',
                 'cursor-pointer disabled:cursor-not-allowed disabled:opacity-50',
-                'hover:bg-accent/8 hover:text-accent-strong hover:ring-1 hover:ring-inset hover:ring-accent/25',
+                'hover:border-accent/55 hover:z-10 hover:bg-accent/8 hover:text-accent-strong',
+                'focus-visible:border-accent/55 focus-visible:z-10 focus-visible:outline-none',
               )}
             >
               <span
