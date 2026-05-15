@@ -48,28 +48,6 @@ pnpm build     # production build (also typechecks)
 | `/test-molecule` | **Author dev tool.** Plain harness for the Three.js scene — molecule + chip toggles, nothing else. |
 | `/evolution` | **Narration page.** Scrubber over the seven-commit evolution of the prototype, with captions on what each phase was wrestling with. ←/→ to navigate. Standalone (no app chrome). |
 
-## Where to look in the code
-
-**The artifact itself**
-- `src/components/prototype/Artifact.tsx` — the inline artifact shell, stage machine, stepper.
-- `src/components/prototype/MoleculeScene.tsx` — the Three.js scene (XeF₂, XeF₂ axial-strain, ClF₃).
-- `src/components/prototype/RepresentationPanels.tsx` — the materials / Lewis / geometry side panels.
-- `src/components/prototype/ControlPane.tsx` — chip toggles for bonds / lone pairs / equatorial plane / angles.
-
-**The script and state**
-- `src/lib/artifact-script.ts` — the load-bearing piece. Beats, bubble copy, misconception routing, prediction options, resources. Hand-authored because the misconceptions are the craft.
-- `src/lib/prototype-store.tsx` — store + reducer for the arc (`opening | choosing | wrapper-response | artifact-active | artifact-resolved | wrapper-followup`).
-- `src/lib/concepts.ts` — single concept registry entry + trigger criteria + the canonical trigger message and attachments.
-- `src/lib/artifact-interaction.ts` — captures what the user did inside the artifact so the post-artifact chat message can reference it.
-
-**The chat shell (starter code, extended)**
-- `src/components/chat/AssistantBody.tsx` — recognizes the `<artifact/>` placeholder in Claude's stream and swaps in the live component.
-- `src/components/chat/InputBar.tsx`, `Sidebar.tsx`, etc. — starter chat UI.
-
-**API**
-- `src/app/api/chat/route.ts` — Haiku classifier (concept match) + Sonnet for the affordance prose. Returns a multi-block envelope so the client can render text + artifact placeholders.
-- `src/app/api/wrapper-response/route.ts` — post-artifact bridge response. Reads the artifact interaction summary so the bridge can reference what actually happened.
-
 ## Design rationale
 
 The assignment asks the rationale to touch on six points. The longer-form version lives in the emailed video and doc; here's how each one cashes out in what's in this repo.

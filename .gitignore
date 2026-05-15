@@ -46,3 +46,6 @@ next-env.d.ts
 /transcripts-bundle/
 /transcripts-bundle.zip
 /docs/claude-conversations.json
+
+# walkthrough video — emailed, not committed (too large for git)
+*.mp4
