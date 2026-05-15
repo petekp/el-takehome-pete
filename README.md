@@ -1,21 +1,20 @@
 # Pete's Education Labs take-home
 
-## Intro & Thesis
+## Intro
 
 Hello! This is a prototype I designed and built while exploring Option B, learning through collaboration with Claude.
 
 I loved exploring this problem space. Claude and I went on quite the hike together, exploring a wide variety of ideas before narrowing down to the one I felt was both reasonable within the time constraints, while also capturing the right balance of practicality and potential.
 
-The concept I prototyped on hinges on a combination of Claude's code generation capabilities with the philosophy of [Explanatory Explanations](https://worrydream.com/ExplorableExplanations/). 
+Over the past year, I've leaned increasingly hard into agentic coding, letting Claude handle most implementation while I act as the lead engineer / architect. At times, I can't help but feel like a stranger to my own code. As far as understanding code, few things compare with manually grappling with problems and their subproblems, implementing solutions by hand, character by character. It's not the typing itself but the process of being steeped in individual files, function bodies, loops, for long periods of time, grappling with the minutia. The time between thought and code is is now so compressed, we miss out on the 
 
-This repo contains a working prototype for keeping users in charge of their own learning while working with Claude. In this demo, Claude sees a chemistry question where a quick answer would skip past something worth understanding, then offers two paths:
+**What's the magical mixture of incentives and mechanics that lets us amplify our output without completely losing the plot, inadvertently eroding our agency and our sense of being fully engaged, refining our skills, building our own capabilities, building confidence?**
 
-- **just answer it**: Claude gives the direct answer.
-- **let's look at it together**: Claude opens an inline interactive artifact.
+This prototype emphasizes what makes AI powerful and Claude a new generation of tool, enabled and enhanced through personal agency vs. being spoon-fed. The artifact is crafted just for the user in the moment, tuned precisely to help close a gap, however small, in their mental model of the thing they're grappling with.
 
-The shipped artifact walks through XeF2 molecular geometry using a real student's question, VSEPR chart, and Lewis structure. It catches a partly-right hunch, lets the user push on it with a 3D model they can touch, and asks them to apply the same idea to a different molecule.
+Mechanically and conceptually, the concept I prototyped hinges on a combination of Claude's code generation capabilities with the philosophy of [Explanatory Explanations](https://worrydream.com/ExplorableExplanations/) and elements of Robert A. Bjork's concept of [desireable difficulties](https://en.wikipedia.org/wiki/Desirable_difficulty).
 
-Submission materials:
+## Submission materials
 
 - Live prototype: https://el-labs-takehome-pete.vercel.app
 - Walkthrough video: attached to the [`submission-v1` release](https://github.com/petekp/el-takehome-pete/releases/tag/submission-v1) ([direct download](https://github.com/petekp/el-takehome-pete/releases/download/submission-v1/pete-exercise-walkthrough.mp4))
