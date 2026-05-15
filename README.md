@@ -1,6 +1,12 @@
-# Education Labs take-home
+# Pete's Education Labs take-home
 
-Pete Petrash · Option B: **learning through collaboration with Claude**
+## Intro & Thesis
+
+Hello! This is a prototype I designed and built while exploring Option B, learning through collaboration with Claude.
+
+I loved exploring this problem space. Claude and I went on quite the hike together, exploring a wide variety of ideas before narrowing down to the one I felt was both reasonable within the time constraints, while also capturing the right balance of practicality and potential.
+
+The concept I prototyped on hinges on a combination of Claude's code generation capabilities with the philosophy of [Explanatory Explanations](https://worrydream.com/ExplorableExplanations/). 
 
 This repo contains a working prototype for keeping users in charge of their own learning while working with Claude. In this demo, Claude sees a chemistry question where a quick answer would skip past something worth understanding, then offers two paths:
 

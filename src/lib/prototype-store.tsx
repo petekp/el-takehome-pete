@@ -225,6 +225,7 @@ export type PrototypeStore = {
   // Artifact transitions --------------------------------------------------
   advanceArtifact: () => void
   retreatArtifact: () => void
+  resetArtifact: () => void
   recordPrediction1: (input: { optionId?: Prediction1Key; freeText?: string }) => void
   recordPrediction2: (input: { optionId?: Prediction2Key; freeText?: string }) => void
   closeArtifact: () => void
@@ -691,6 +692,24 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     )
   }, [])
 
+  const resetArtifact = useCallback(() => {
+    setState((s) =>
+      withActiveArc(s, (arc) => {
+        const a = arc.artifact
+        if (!a) return arc
+        return {
+          ...arc,
+          beat: 'artifact-active',
+          artifact: {
+            ...EMPTY_ARTIFACT,
+            userAttachments: a.userAttachments,
+            openedAt: Date.now(),
+          },
+        }
+      }),
+    )
+  }, [])
+
   const recordPrediction1 = useCallback(
     (input: { optionId?: Prediction1Key; freeText?: string }) => {
       setState((s) =>
@@ -893,6 +912,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       chooseLearn,
       advanceArtifact,
       retreatArtifact,
+      resetArtifact,
       recordPrediction1,
       recordPrediction2,
       closeArtifact,
@@ -910,6 +930,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       chooseLearn,
       advanceArtifact,
       retreatArtifact,
+      resetArtifact,
       recordPrediction1,
       recordPrediction2,
       closeArtifact,

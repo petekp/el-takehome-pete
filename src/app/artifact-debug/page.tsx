@@ -134,6 +134,7 @@ export default function ArtifactDebugPage() {
       retreatArtifact: () => {
         setArtifact((a) => ({ ...a, bubbleIndex: Math.max(0, a.bubbleIndex - 1) }))
       },
+      resetArtifact: () => setArtifact(INITIAL_ARTIFACT),
       recordPrediction1: ({ optionId, freeText }) => {
         const key: Prediction1Key = optionId ?? 'unclassified'
         setArtifact((a) => ({

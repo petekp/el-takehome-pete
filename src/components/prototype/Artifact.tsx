@@ -11,6 +11,7 @@ import {
   Expand,
   Maximize2,
   Minimize2,
+  RotateCcw,
   Share2,
   X,
 } from 'lucide-react'
@@ -138,6 +139,7 @@ export function Artifact() {
     state,
     advanceArtifact,
     retreatArtifact,
+    resetArtifact,
     recordPrediction1,
     recordPrediction2,
     closeArtifact,
@@ -224,6 +226,17 @@ export function Artifact() {
     setStepDirection('back')
     retreatArtifact()
   }, [retreatArtifact])
+
+  const handleReset = useCallback(() => {
+    setStepDirection('back')
+    setReferencesOpen(false)
+    setMaterialsOpen(false)
+    setExpandedPanel(null)
+    setRowSelection(null)
+    setIntroStatementReady(true)
+    setIntroStatementStreamed(false)
+    resetArtifact()
+  }, [resetArtifact])
 
   const handleSubmitPrediction1 = useCallback(
     (input: { optionId?: Prediction1Key; freeText?: string }) => {
@@ -351,6 +364,7 @@ export function Artifact() {
             onExpandPanel={handleExpandPanel}
             onAdvance={handleAdvance}
             onRetreat={handleRetreat}
+            onReset={handleReset}
             onSubmitPrediction1={handleSubmitPrediction1}
             onSubmitPrediction2={handleSubmitPrediction2}
             onClose={closeArtifact}
@@ -733,6 +747,7 @@ type RightPaneProps = {
   onExpandPanel: (panel: LiteracyPanel | null) => void
   onAdvance: () => void
   onRetreat: () => void
+  onReset: () => void
   onSubmitPrediction1: (input: { optionId?: Prediction1Key; freeText?: string }) => void
   onSubmitPrediction2: (input: { optionId?: Prediction2Key; freeText?: string }) => void
   onClose: () => void
@@ -750,6 +765,7 @@ function RightPane({
   onExpandPanel,
   onAdvance,
   onRetreat,
+  onReset,
   onSubmitPrediction1,
   onSubmitPrediction2,
   onClose,
@@ -827,9 +843,11 @@ function RightPane({
         <Stepper
           canRetreat={canRetreat && interactive}
           canAdvance={canAdvance}
+          resetMode={isFinalBeat}
           position={position}
           total={TOTAL_STEPS}
           onRetreat={onRetreat}
+          onReset={onReset}
           onAdvance={onAdvance}
         />
       </div>
@@ -1248,31 +1266,41 @@ function PredictPanel<K extends string>({
 function Stepper({
   canRetreat,
   canAdvance,
+  resetMode,
   position,
   total,
   onRetreat,
+  onReset,
   onAdvance,
 }: {
   canRetreat: boolean
   canAdvance: boolean
+  resetMode: boolean
   position: number
   total: number
   onRetreat: () => void
+  onReset: () => void
   onAdvance: () => void
 }) {
+  const retreatLabel = resetMode ? 'Reset' : 'Back'
+  const retreatIcon = resetMode ? (
+    <RotateCcw className="size-3.5" />
+  ) : (
+    <ChevronLeft className="size-3.5" />
+  )
   return (
     <div className="flex items-center justify-between px-4 py-3">
       <button
         type="button"
-        onClick={onRetreat}
+        onClick={resetMode ? onReset : onRetreat}
         disabled={!canRetreat}
         className={cn(
           'text-text-tertiary hover:text-text-secondary inline-flex items-center gap-1 text-[12px]',
           'transition-colors disabled:cursor-not-allowed disabled:opacity-30',
         )}
       >
-        <ChevronLeft className="size-3.5" />
-        Back
+        {retreatIcon}
+        {retreatLabel}
       </button>
       <span className="text-text-tertiary text-[11px] tabular-nums">
         {position} / {total}
