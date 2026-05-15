@@ -43,7 +43,7 @@ The user can choose the direct-answer path if they choose; no judgement either w
 
 ## Process
 
-I worked product design first, design engineering second. I narrowed the problem from broad "AI learning" down to one specific moment in the chat: Claude notices when the user is about to skip over something worth understanding, then offers a quick detour without derailing the conversation. I sketched the major moments in low fidelity, pressure-tested the shape against Claude's existing chat and artifact patterns, wrote a design brief, then built the smallest complete arc.
+I worked on the product design first, design engineering second. I narrowed the problem from broad "AI learning" down to one specific moment in the chat: Claude notices when the user has expressed desire to understand something -- a small gap in their mental model -- and offers a quick detour without derailing the conversation. I sketched the major moments in low fidelity, pressure-tested the shape against Claude's existing chat and artifact patterns, wrote a design brief, then built the smallest complete arc.
 
 The biggest pivot was leaving Promise.all behind for chemistry. My wife is picking up general chemistry again after regretting not finishing it in college, and she described the exact problem I'd designed the artifact for: a static textbook diagram she could pattern-match through but couldn't picture in 3D. Listening to her shaped the prototype's voice, scope, and final form. Molecular geometry is also a harder test of craft, since a flat image on a page can't capture spatial structure at all. I treated the pivot as a higher-conviction bet on the thesis.
 
@@ -82,7 +82,7 @@ I'd scale by depth, not breadth. Pick a narrow topic where Claude already sees t
 
 `claude-haiku-4-5` checks whether the incoming message is about molecular geometry. `claude-sonnet-4-6` writes the offer in the chat, the direct answer, and the follow-up after the artifact closes. The app controls everything where trust matters: molecule geometry, prediction branches, row states, visual treatments. For chat turns that involve the artifact, the app passes Claude a description of what's on screen so the reply stays grounded in what the user actually sees.
 
-Claude handles language, timing, and conversational continuity. The app owns the high-trust interactive surface.
+Claude handles language, timing, and conversational continuity.
 
 ## Local Development
 
@@ -105,8 +105,8 @@ Without an `ANTHROPIC_API_KEY`, the scaffold falls back to canned chat output. T
 
 | Path | Purpose |
 | --- | --- |
-| `/new` | Seeded evaluator entrypoint. Press send to start the arc. |
+| [`/new`](https://el-labs-takehome-pete.vercel.app/new) | Seeded evaluator entrypoint. Press send to start the arc. |
 | `/chat/[chatId]` | Live chat thread where the artifact renders. |
-| `/artifact-debug` | Authoring harness for jumping to artifact stages. |
-| `/test-molecule` | Authoring harness for the Three.js molecule scene. |
-| `/evolution` | Standalone narration page showing the prototype's commit-by-commit evolution. |
+| [`/artifact-debug`](https://el-labs-takehome-pete.vercel.app/artifact-debug) | Authoring harness for jumping to artifact stages. |
+| [`/test-molecule`](https://el-labs-takehome-pete.vercel.app/test-molecule) | Authoring harness for the Three.js molecule scene. |
+| [`/evolution`](https://el-labs-takehome-pete.vercel.app/evolution) | Standalone narration page showing the prototype's commit-by-commit evolution. |

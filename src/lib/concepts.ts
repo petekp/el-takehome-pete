@@ -64,7 +64,7 @@ const MOLECULAR_GEOMETRY: Concept = {
           "Okay, I can see the row on your chart you're stuck on, and your Lewis structure. The chart's wedge-and-dash for 5 domains with 3 lone pairs is genuinely confusing because it's trying to compress 3D into 2D, and the Lewis drawing makes it look like the lone pairs are around Xe in a way that blocks the F's from forming bonds. That intuition is half-right and the half that's off is exactly the spatial part. Want to look at it together?",
         cta: {
           wrapper: 'Just the answer, thanks',
-          learn: "Let's look at it together",
+          learn: "Let's look at it together (~5 min)",
         },
       },
     },
