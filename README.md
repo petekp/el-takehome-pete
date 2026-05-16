@@ -12,7 +12,7 @@ Over the past year, I've leaned increasingly hard into agentic coding, letting C
 
 This prototype emphasizes what makes AI powerful and Claude a new generation of tool, enabled and enhanced through personal agency vs. being spoon-fed. The artifact is crafted just for the user in the moment, tuned precisely to help close a gap, however small, in their mental model of the thing they're grappling with.
 
-Mechanically and conceptually, the concept I prototyped hinges on a combination of Claude's code generation capabilities with the philosophy of [Explanatory Explanations](https://worrydream.com/ExplorableExplanations/) and elements of Robert A. Bjork's concept of [desireable difficulties](https://en.wikipedia.org/wiki/Desirable_difficulty).
+Mechanically and conceptually, the concept I prototyped hinges on a combination of Claude's code generation capabilities with the philosophy of [Explorable Explanations](https://worrydream.com/ExplorableExplanations/) and elements of Robert A. Bjork's concept of [desireable difficulties](https://en.wikipedia.org/wiki/Desirable_difficulty).
 
 ## Submission materials
 
